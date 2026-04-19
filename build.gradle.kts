@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.yuroyami"
-version = providers.gradleProperty("kmpSsot.version").getOrElse("0.1.2")
+version = providers.gradleProperty("kmpSsot.version").getOrElse("0.2.0")
 
 java {
     toolchain {
