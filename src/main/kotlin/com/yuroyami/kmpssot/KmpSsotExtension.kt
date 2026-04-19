@@ -7,6 +7,12 @@ import org.gradle.api.provider.Provider
 /**
  * DSL for the kmp-ssot plugin. Applied to the **root project** only.
  *
+ * Scope: genuinely cross-platform identity (app name, version, bundle ID,
+ * locales) plus shared toolchain bits (Java version). Android-only toolchain
+ * (compileSdk, minSdk, targetSdk, ndkVersion) is intentionally **not** here —
+ * those belong in each Android module where they are actually relevant, and
+ * keeping them out sidesteps KGP 2.3's android-target validator entirely.
+ *
  * Usage in the root build.gradle.kts:
  * ```
  * kmpSsot {
@@ -15,14 +21,11 @@ import org.gradle.api.provider.Provider
  *     bundleIdBase = "com.yuroyami.jetzy"
  *
  *     iosBundleSuffix = ".ios"
- *     compileSdk      = 36
- *     minSdk          = 26
  *     javaVersion     = 21
  *
- *     locales = listOf("en", "ar", "fr")   // propagated to Android resourceConfigurations + iOS knownRegions
+ *     locales = listOf("en", "ar", "fr")
  *
- *     // All toggles default to true. Flip one to false to opt out of that
- *     // piece of SSOT propagation while leaving the rest intact.
+ *     // Toggles — all default true.
  *     // propagateAppName    = true
  *     // propagateBundleId   = true
  *     // propagateVersion    = true
@@ -33,7 +36,7 @@ import org.gradle.api.provider.Provider
  */
 abstract class KmpSsotExtension {
 
-    // --- Core identity --------------------------------------------------------
+    // --- Identity -------------------------------------------------------------
 
     abstract val appName: Property<String>
     abstract val versionName: Property<String>
@@ -42,13 +45,9 @@ abstract class KmpSsotExtension {
     abstract val iosBundleSuffix: Property<String>
     abstract val androidApplicationIdSuffix: Property<String>
 
-    // --- Build toolchain ------------------------------------------------------
+    // --- Shared toolchain (cross-platform) -----------------------------------
 
-    abstract val compileSdk: Property<Int>
-    abstract val minSdk: Property<Int>
-    abstract val targetSdk: Property<Int>
     abstract val javaVersion: Property<Int>
-    abstract val ndkVersion: Property<String>
 
     // --- Localization ---------------------------------------------------------
 

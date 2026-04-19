@@ -11,25 +11,26 @@ import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
 
 /**
- * Single source of truth for KMP app config. Applied once at the **root project**.
+ * Single source of truth for KMP app identity. Applied once at the **root project**.
  *
  * When applied, this plugin:
  *  1. Registers the [KmpSsotExtension] as `kmpSsot { }` on the root project.
  *  2. Registers the `syncIosConfig` task on the root project.
- *  3. Walks all subprojects:
- *     - `com.android.application`     → wires full app config (applicationId, versionCode/Name,
- *       compileSdk/minSdk/targetSdk, compileOptions, ndkVersion, resourceConfigurations,
- *       manifestPlaceholders[appName]).
- *     - `com.android.library`         → wires shared bits (compileSdk/minSdk, compileOptions,
- *       ndkVersion, resourceConfigurations).
- *     - `org.jetbrains.kotlin.multiplatform` → hooks `syncIosConfig` as a dependency of
- *       `linkPod*FrameworkIos*` and `embedAndSignAppleFrameworkForXcode`, so iOS builds
- *       keep pbxproj in sync.
+ *  3. Walks all subprojects and listens for their plugin applications:
+ *     - `com.android.application`   → sets applicationId, versionCode/Name,
+ *       manifestPlaceholders[appName], resourceConfigurations (from locales),
+ *       and compileOptions (source/target = javaVersion).
+ *     - `com.android.library`       → sets resourceConfigurations and compileOptions.
+ *     - `org.jetbrains.kotlin.multiplatform` → hooks `syncIosConfig` as a
+ *       dependency of iOS framework tasks.
  *
- * Consumer responsibilities (outside the plugin's reach):
- *  - Change `android:label="..."` to `android:label="${'$'}{appName}"` in AndroidManifest.xml.
- *  - Ensure iOS Info.plist uses `$(MARKETING_VERSION)` for CFBundleShortVersionString
- *    and `$(CURRENT_PROJECT_VERSION)` for CFBundleVersion.
+ * What it intentionally does **not** do:
+ *  - Set compileSdk / minSdk / targetSdk / ndkVersion. Those are Android-only
+ *    toolchain values; keep them in the Android module's own build file.
+ *
+ * Consumer responsibilities:
+ *  - Change `android:label="..."` → `android:label="${'$'}{appName}"` in AndroidManifest.xml.
+ *  - Ensure iOS Info.plist uses `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)`.
  */
 class KmpSsotPlugin : Plugin<Project> {
 
@@ -42,8 +43,6 @@ class KmpSsotPlugin : Plugin<Project> {
         val ext = target.extensions.create<KmpSsotExtension>("kmpSsot").apply {
             iosBundleSuffix.convention("")
             androidApplicationIdSuffix.convention("")
-            compileSdk.convention(36)
-            minSdk.convention(26)
             javaVersion.convention(21)
             iosProjectPath.convention("iosApp/iosApp.xcodeproj/project.pbxproj")
             locales.convention(emptyList())
@@ -101,17 +100,11 @@ class KmpSsotPlugin : Plugin<Project> {
 
     // --- Android application wiring -----------------------------------------
     //
-    // We configure eagerly inside the plugins.withId callback (which fires the
-    // moment AGP is applied, before the subproject's own android { } block runs).
-    // AGP 9 and KGP 2.x both have strict validators that reject an unset
-    // compileSdk, and those validators run *before* finalizeDsl would fire —
-    // so setting values here, up-front, is the only reliable window.
+    // Configured eagerly inside the plugins.withId callback so values land
+    // before the subproject's own android { } block runs.
 
     private fun wireAndroidApp(project: Project, ext: KmpSsotExtension) {
         val android = project.extensions.getByType(ApplicationExtension::class.java)
-
-        android.compileSdk = ext.compileSdk.get()
-        ext.ndkVersion.orNull?.let { android.ndkVersion = it }
 
         android.defaultConfig.apply {
             if (ext.propagateBundleId.get()) applicationId = ext.androidApplicationId.get()
@@ -119,8 +112,6 @@ class KmpSsotPlugin : Plugin<Project> {
                 versionCode = ext.versionCode.get()
                 versionName = ext.versionName.get()
             }
-            minSdk = ext.minSdk.get()
-            targetSdk = ext.targetSdk.orNull ?: ext.compileSdk.get()
             if (ext.propagateAppName.get()) manifestPlaceholders["appName"] = ext.appName.get()
             if (ext.propagateLocaleList.get()) {
                 val l = ext.locales.get()
@@ -138,10 +129,6 @@ class KmpSsotPlugin : Plugin<Project> {
     private fun wireAndroidLibrary(project: Project, ext: KmpSsotExtension) {
         val android = project.extensions.getByType(LibraryExtension::class.java)
 
-        android.compileSdk = ext.compileSdk.get()
-        ext.ndkVersion.orNull?.let { android.ndkVersion = it }
-
-        android.defaultConfig.minSdk = ext.minSdk.get()
         if (ext.propagateLocaleList.get()) {
             val l = ext.locales.get()
             if (l.isNotEmpty()) android.defaultConfig.resourceConfigurations.addAll(l)
