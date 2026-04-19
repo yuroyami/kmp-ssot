@@ -1,6 +1,6 @@
 package com.yuroyami.kmpssot
 
-import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import org.gradle.api.JavaVersion
 import org.gradle.api.Plugin
 import org.gradle.api.Project
@@ -64,27 +64,25 @@ class KmpSsotPlugin : Plugin<Project> {
 
     private fun wireAndroidWhenApplied(target: Project, ext: KmpSsotExtension) {
         target.plugins.withId("com.android.application") {
-            // Defer to afterEvaluate so the consumer's kmpSsot { } block has been parsed.
-            target.afterEvaluate {
-                val android = extensions.getByType<ApplicationExtension>()
+            // finalizeDsl runs after the consumer's android { } block but before AGP
+            // locks the DSL — the correct window for setting compileSdk, versionCode, etc.
+            val components = target.extensions
+                .getByType(ApplicationAndroidComponentsExtension::class.java)
 
+            components.finalizeDsl { android ->
                 android.compileSdk = ext.compileSdk.get()
                 ext.ndkVersion.orNull?.let { android.ndkVersion = it }
 
-                android.defaultConfig {
-                    applicationId = ext.androidApplicationId.get()
-                    versionCode = ext.versionCode.get()
-                    versionName = ext.versionName.get()
-                    minSdk = ext.minSdk.get()
-                    targetSdk = ext.targetSdk.orNull ?: ext.compileSdk.get()
-                    manifestPlaceholders["appName"] = ext.appName.get()
-                }
+                android.defaultConfig.applicationId = ext.androidApplicationId.get()
+                android.defaultConfig.versionCode = ext.versionCode.get()
+                android.defaultConfig.versionName = ext.versionName.get()
+                android.defaultConfig.minSdk = ext.minSdk.get()
+                android.defaultConfig.targetSdk = ext.targetSdk.orNull ?: ext.compileSdk.get()
+                android.defaultConfig.manifestPlaceholders["appName"] = ext.appName.get()
 
                 val jv = JavaVersion.toVersion(ext.javaVersion.get())
-                android.compileOptions {
-                    sourceCompatibility = jv
-                    targetCompatibility = jv
-                }
+                android.compileOptions.sourceCompatibility = jv
+                android.compileOptions.targetCompatibility = jv
             }
         }
     }
