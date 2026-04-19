@@ -42,7 +42,7 @@ the plugin without environment variables.
 ```kotlin
 // <root>/build.gradle.kts
 plugins {
-    id("com.yuroyami.kmpssot") version "0.2.1"
+    id("com.yuroyami.kmpssot") version "0.3.0"
     // ...your other plugins, typically with .apply(false)...
 }
 
@@ -53,8 +53,6 @@ kmpSsot {
 
     iosBundleSuffix            = ".ios"        // default ""
     androidApplicationIdSuffix = ""             // default ""
-    compileSdk                 = 36
-    minSdk                     = 26
     javaVersion                = 21
 
     // Propagated to Android resourceConfigurations (app + library) and to
@@ -71,8 +69,33 @@ kmpSsot {
 ```
 
 Application is **root-only** by design. Submodules declare their own local
-concerns (namespace, signing, plugin list) and pick up everything else from
-the root DSL automatically.
+concerns (namespace, signing, Android toolchain, plugin list) and pick up
+cross-platform identity from the root DSL automatically.
+
+### Scope: cross-platform identity only
+
+`kmpSsot { }` deliberately covers cross-platform identity and toolchain:
+app name, version, bundle ID, Java version, locales. It does **not** cover
+`compileSdk`, `minSdk`, `targetSdk`, or `ndkVersion` — those are Android-only
+toolchain values and belong in each Android module's own build file:
+
+```kotlin
+// androidApp/build.gradle.kts
+android {
+    compileSdk = 36
+    defaultConfig { minSdk = 26; targetSdk = 36 }
+}
+
+// shared/build.gradle.kts  (KMP module)
+kotlin.android {
+    compileSdk { version = release(36) }
+    minSdk = 26
+}
+```
+
+Keeping Android-only toolchain out of the SSOT block avoids a hairy reach into
+KGP 2.3's android-target validator and keeps the DSL honest about what's
+actually cross-platform.
 
 ### 3. Two one-time consumer-side patches
 
@@ -97,37 +120,13 @@ the root DSL automatically.
 
 | Where | Values |
 |---|---|
-| Any subproject with `com.android.application` | `applicationId`, `versionCode/Name`, `compileSdk`, `minSdk`, `targetSdk`, `compileOptions` (source/target), `ndkVersion`, `manifestPlaceholders["appName"]`, `resourceConfigurations` |
-| Any subproject with `com.android.library` (not KMP) | `compileSdk`, `minSdk`, `compileOptions`, `ndkVersion`, `resourceConfigurations` |
+| Any subproject with `com.android.application` | `applicationId`, `versionCode/Name`, `compileOptions` (source/target from `javaVersion`), `manifestPlaceholders["appName"]`, `resourceConfigurations` |
+| Any subproject with `com.android.library` | `compileOptions`, `resourceConfigurations` |
 | Any subproject with `org.jetbrains.kotlin.multiplatform` | `syncIosConfig` hooked into `linkPod*FrameworkIos*` + `embedAndSignAppleFrameworkForXcode` tasks |
 | iOS pbxproj (rewritten in place) | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`, `INFOPLIST_KEY_CFBundleDisplayName`, `PRODUCT_BUNDLE_IDENTIFIER`, `knownRegions` |
 
 `versionCode` is derived from `versionName` via the formula
 `"1" + dot-segments-padded-to-3` (e.g. `0.3.0` → `1000003000`).
-
-## Known wrinkle: KMP library modules
-
-If a module combines the Kotlin Multiplatform plugin with an `android()`
-target, KGP 2.3 runs its own `compileSdk` validator that the plugin can't
-currently reach. Forward the value from the root:
-
-```kotlin
-// shared/build.gradle.kts
-import com.yuroyami.kmpssot.KmpSsotExtension
-val ssot = rootProject.extensions.getByType(KmpSsotExtension::class.java)
-
-kotlin {
-    android {
-        compileSdk { version = release(ssot.compileSdk.get()) }
-        minSdk = ssot.minSdk.get()
-        // everything else still auto-wired by the plugin
-    }
-}
-```
-
-Still a single source — the value lives in the root `kmpSsot { }` block, the
-module just reads it back. A future version may close this gap by reaching
-into KGP's `KotlinAndroidTarget` directly.
 
 ---
 
