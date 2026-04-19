@@ -9,16 +9,22 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
 
 /**
- * Rewrites the iOS Xcode project.pbxproj in place so that its build settings
- * match the kmpSsot { } DSL.
+ * Rewrites the iOS Xcode project.pbxproj in place so its build settings match
+ * the kmpSsot { } DSL. Each rewrite is gated on (a) its `propagate*` toggle
+ * being on AND (b) the corresponding value being present in the DSL.
  *
- * Each rewrite is gated by its own `propagate*` toggle. Keys touched:
- *  - propagateVersion     → MARKETING_VERSION, CURRENT_PROJECT_VERSION
- *  - propagateAppName     → INFOPLIST_KEY_CFBundleDisplayName
- *  - propagateBundleId    → PRODUCT_BUNDLE_IDENTIFIER
- *  - propagateLocaleList  → knownRegions (...)
+ * Keys touched:
+ *  - `propagateVersion`    → `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`
+ *  - `propagateAppName`    → `INFOPLIST_KEY_CFBundleDisplayName`, `INFOPLIST_KEY_CFBundleName`
+ *  - `propagateBundleId`   → `PRODUCT_BUNDLE_IDENTIFIER`
+ *  - `propagateLocaleList` → `knownRegions (...)`
  *
- * Idempotent: no write happens if the file is already in sync.
+ * Idempotent — no write happens if the file is already in sync.
+ *
+ * Known limitation: `PRODUCT_BUNDLE_IDENTIFIER` is rewritten for every
+ * target in the pbxproj (main app, tests, extensions). Multi-target projects
+ * that need per-target bundle IDs should set `propagateBundleId = false` and
+ * manage bundle IDs manually.
  */
 @DisableCachingByDefault(because = "Trivial text rewrite; caching adds overhead without payoff.")
 abstract class SyncIosConfigTask : DefaultTask() {
@@ -53,7 +59,7 @@ abstract class SyncIosConfigTask : DefaultTask() {
         val original = file.readText()
         var updated = original
 
-        if (propagateVersion.get()) {
+        if (propagateVersion.get() && versionName.isPresent) {
             updated = updated.replace(
                 Regex("""MARKETING_VERSION = [^;]+;"""),
                 "MARKETING_VERSION = ${versionName.get()};"
@@ -64,14 +70,23 @@ abstract class SyncIosConfigTask : DefaultTask() {
             )
         }
 
-        if (propagateAppName.get()) {
+        if (propagateAppName.get() && appName.isPresent) {
+            val n = appName.get()
             updated = updated.replace(
                 Regex("""INFOPLIST_KEY_CFBundleDisplayName = [^;]+;"""),
-                "INFOPLIST_KEY_CFBundleDisplayName = ${appName.get()};"
+                "INFOPLIST_KEY_CFBundleDisplayName = $n;"
+            )
+            // Also sync CFBundleName — the "short name" shown under the icon on
+            // older iOS versions and used as fallback when CFBundleDisplayName
+            // is missing. Regex only matches if the key already exists in pbxproj,
+            // so Xcode templates without it stay untouched.
+            updated = updated.replace(
+                Regex("""INFOPLIST_KEY_CFBundleName = [^;]+;"""),
+                "INFOPLIST_KEY_CFBundleName = $n;"
             )
         }
 
-        if (propagateBundleId.get()) {
+        if (propagateBundleId.get() && bundleId.isPresent) {
             updated = updated.replace(
                 Regex("""PRODUCT_BUNDLE_IDENTIFIER = [^;]+;"""),
                 "PRODUCT_BUNDLE_IDENTIFIER = ${bundleId.get()};"
@@ -81,8 +96,6 @@ abstract class SyncIosConfigTask : DefaultTask() {
         if (propagateLocaleList.get()) {
             val requested = locales.get()
             if (requested.isNotEmpty()) {
-                // knownRegions is canonically the supported locales + Base.
-                // Keep Base, don't duplicate if the user already listed it.
                 val regions = buildList {
                     add("Base")
                     requested.filter { it != "Base" }.forEach { add(it) }
@@ -102,9 +115,10 @@ abstract class SyncIosConfigTask : DefaultTask() {
         if (updated != original) {
             file.writeText(updated)
             logger.lifecycle(
-                "[kmpSsot] iOS pbxproj synced: ${appName.orNull ?: "?"} " +
-                        "v${versionName.orNull ?: "?"} (${versionCode.orNull ?: "?"}), " +
-                        "id=${bundleId.orNull ?: "?"}, " +
+                "[kmpSsot] iOS pbxproj synced: " +
+                        "name=${appName.orNull ?: "[unchanged]"}, " +
+                        "v=${versionName.orNull ?: "[unchanged]"} (${versionCode.orNull ?: "-"}), " +
+                        "id=${bundleId.orNull ?: "[unchanged]"}, " +
                         "locales=${locales.orNull?.takeIf { it.isNotEmpty() } ?: "[unchanged]"}"
             )
         } else {

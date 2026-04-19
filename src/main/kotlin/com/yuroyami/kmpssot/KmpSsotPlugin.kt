@@ -13,24 +13,13 @@ import org.gradle.kotlin.dsl.register
 /**
  * Single source of truth for KMP app identity. Applied once at the **root project**.
  *
- * When applied, this plugin:
- *  1. Registers the [KmpSsotExtension] as `kmpSsot { }` on the root project.
- *  2. Registers the `syncIosConfig` task on the root project.
- *  3. Walks all subprojects and listens for their plugin applications:
- *     - `com.android.application`   → sets applicationId, versionCode/Name,
- *       manifestPlaceholders[appName], resourceConfigurations (from locales),
- *       and compileOptions (source/target = javaVersion).
- *     - `com.android.library`       → sets resourceConfigurations and compileOptions.
- *     - `org.jetbrains.kotlin.multiplatform` → hooks `syncIosConfig` as a
- *       dependency of iOS framework tasks.
- *
- * What it intentionally does **not** do:
- *  - Set compileSdk / minSdk / targetSdk / ndkVersion. Those are Android-only
- *    toolchain values; keep them in the Android module's own build file.
- *
- * Consumer responsibilities:
- *  - Change `android:label="..."` → `android:label="${'$'}{appName}"` in AndroidManifest.xml.
- *  - Ensure iOS Info.plist uses `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)`.
+ * Every identity field in `kmpSsot { }` is optional. A field gets propagated
+ * iff (a) its `propagate*` toggle is true (default true) AND (b) the value
+ * is actually set in the DSL. This means you can apply the plugin to a
+ * production app and declare only the bits you want centralized — e.g.
+ * `versionName` + `locales` + `appName`, leaving `bundleIdBase` unset so the
+ * already-registered Android applicationId and iOS PRODUCT_BUNDLE_IDENTIFIER
+ * are never touched.
  */
 class KmpSsotPlugin : Plugin<Project> {
 
@@ -41,7 +30,7 @@ class KmpSsotPlugin : Plugin<Project> {
         }
 
         val ext = target.extensions.create<KmpSsotExtension>("kmpSsot").apply {
-            iosBundleSuffix.convention("")
+            iosBundleSuffix.convention(".iosApp")
             androidApplicationIdSuffix.convention("")
             javaVersion.convention(21)
             iosProjectPath.convention("iosApp/iosApp.xcodeproj/project.pbxproj")
@@ -77,7 +66,9 @@ class KmpSsotPlugin : Plugin<Project> {
             versionName.set(ext.versionName)
             versionCode.set(ext.versionCode)
             appName.set(ext.appName)
-            bundleId.set(ext.iosBundleId)
+            // Only set bundleId if bundleIdBase is present; otherwise leave unset
+            // so the task's isPresent check skips PRODUCT_BUNDLE_IDENTIFIER rewrites.
+            if (ext.bundleIdBase.isPresent) bundleId.set(ext.iosBundleId)
             locales.set(ext.locales)
             propagateVersion.set(ext.propagateVersion)
             propagateAppName.set(ext.propagateAppName)
@@ -99,20 +90,21 @@ class KmpSsotPlugin : Plugin<Project> {
     }
 
     // --- Android application wiring -----------------------------------------
-    //
-    // Configured eagerly inside the plugins.withId callback so values land
-    // before the subproject's own android { } block runs.
 
     private fun wireAndroidApp(project: Project, ext: KmpSsotExtension) {
         val android = project.extensions.getByType(ApplicationExtension::class.java)
 
         android.defaultConfig.apply {
-            if (ext.propagateBundleId.get()) applicationId = ext.androidApplicationId.get()
-            if (ext.propagateVersion.get()) {
+            if (ext.propagateBundleId.get() && ext.bundleIdBase.isPresent) {
+                applicationId = ext.androidApplicationId.get()
+            }
+            if (ext.propagateVersion.get() && ext.versionName.isPresent) {
                 versionCode = ext.versionCode.get()
                 versionName = ext.versionName.get()
             }
-            if (ext.propagateAppName.get()) manifestPlaceholders["appName"] = ext.appName.get()
+            if (ext.propagateAppName.get() && ext.appName.isPresent) {
+                manifestPlaceholders["appName"] = ext.appName.get()
+            }
             if (ext.propagateLocaleList.get()) {
                 val l = ext.locales.get()
                 if (l.isNotEmpty()) resourceConfigurations.addAll(l)
