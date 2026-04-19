@@ -1,42 +1,23 @@
 # kmp-ssot
 
-A standalone Gradle plugin that provides a **single source of truth** for KMP app
-configuration — `appName`, `versionName`, `versionCode`, `bundleId`, `compileSdk`,
-`minSdk`, `javaVersion` — and propagates it to both Android and iOS builds
-automatically.
+A Gradle plugin that gives a Kotlin Multiplatform project **one `kmpSsot { }`
+block at the root** and propagates every value (app name, version, bundle ID,
+compile/min SDK, locale list, …) to Android application, Android library, and
+iOS builds automatically.
 
-No more hardcoding the app name in three places, or watching the iOS version
-drift from the Android version.
-
----
-
-## What it does
-
-Apply the plugin to a KMP app module, declare values once in a `kmpSsot { }` block,
-and the plugin:
-
-- Auto-configures the Android application extension (`applicationId`, `versionName`,
-  `versionCode`, `minSdk`, `compileSdk`, `targetSdk`, `compileOptions`, `ndkVersion`,
-  plus `appName` as a manifest placeholder).
-- Registers a `syncIosConfig` task that rewrites
-  `iosApp/iosApp.xcodeproj/project.pbxproj` on every iOS build so that
-  `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`,
-  `INFOPLIST_KEY_CFBundleDisplayName`, and `PRODUCT_BUNDLE_IDENTIFIER` all
-  match the DSL.
-- Hooks `syncIosConfig` to `linkPod*FrameworkIos*` and
-  `embedAndSignAppleFrameworkForXcode`, so iOS builds never drift.
+One source of truth, automatic propagation, per-concern opt-out toggles.
 
 ---
 
-## Consuming the plugin
+## Install
 
-### 1. Configure `pluginManagement` in `settings.gradle.kts`
+### 1. Add the GitHub Packages repo to `pluginManagement` in `settings.gradle.kts`
 
 ```kotlin
 pluginManagement {
     repositories {
-        gradlePluginPortal()
         google()
+        gradlePluginPortal()
         mavenCentral()
         maven {
             name = "GitHubPackages"
@@ -52,14 +33,17 @@ pluginManagement {
 }
 ```
 
-### 2. Apply in your app module
+Put `gpr.user=<your-gh-username>` and `gpr.key=<PAT with read:packages>` in
+`~/.gradle/gradle.properties` (0600-locked) so Android Studio can resolve
+the plugin without environment variables.
+
+### 2. Apply at the **root project** and declare once
 
 ```kotlin
-// androidApp/build.gradle.kts  (or wherever the Android application lives)
+// <root>/build.gradle.kts
 plugins {
-    id("com.android.application")
-    kotlin("multiplatform")
-    id("com.yuroyami.kmpssot") version "0.1.0"
+    id("com.yuroyami.kmpssot") version "0.2.1"
+    // ...your other plugins, typically with .apply(false)...
 }
 
 kmpSsot {
@@ -67,76 +51,105 @@ kmpSsot {
     versionName  = "0.3.0"
     bundleIdBase = "com.yuroyami.jetzy"
 
-    // Optional:
     iosBundleSuffix            = ".ios"        // default ""
     androidApplicationIdSuffix = ""             // default ""
-    compileSdk                 = 36             // default 36
-    minSdk                     = 26             // default 26
-    javaVersion                = 21             // default 21
-    iosProjectPath             = "iosApp/iosApp.xcodeproj/project.pbxproj" // default
+    compileSdk                 = 36
+    minSdk                     = 26
+    javaVersion                = 21
+
+    // Propagated to Android resourceConfigurations (app + library) and to
+    // iOS pbxproj knownRegions. Leave empty to leave locales alone.
+    locales = listOf("en", "ar", "fr")
+
+    // Per-concern toggles — all default true. Flip a single flag to opt out.
+    // propagateAppName     = true
+    // propagateBundleId    = true
+    // propagateVersion     = true
+    // propagateLocaleList  = true
+    // syncIos              = true   // master switch for the iOS pbxproj rewrite
 }
 ```
 
-### 3. Two one-time consumer-side changes
+Application is **root-only** by design. Submodules declare their own local
+concerns (namespace, signing, plugin list) and pick up everything else from
+the root DSL automatically.
 
-**AndroidManifest.xml** — replace the hardcoded label with the placeholder:
+### 3. Two one-time consumer-side patches
 
+**AndroidManifest.xml** — replace the hardcoded label:
 ```xml
 <application
     android:label="${appName}"
     ... />
 ```
 
-**iOS Info.plist** — replace the hardcoded version literal with the Xcode build-setting
-reference, so `CFBundleShortVersionString` follows `MARKETING_VERSION`
-(which the plugin rewrites):
-
+**iOS Info.plist** — use Xcode build-setting references:
 ```xml
 <key>CFBundleShortVersionString</key>
 <string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key>
+<string>$(CURRENT_PROJECT_VERSION)</string>
 ```
-
-That's it. Every build now reads from the `kmpSsot { }` block.
 
 ---
 
-## Credentials for GitHub Packages
+## What gets auto-wired
 
-GitHub Packages requires authentication even for public reads. Generate a
-[classic PAT](https://github.com/settings/tokens) with scope `read:packages`
-(publishers also need `write:packages`) and put it in `~/.gradle/gradle.properties`:
+| Where | Values |
+|---|---|
+| Any subproject with `com.android.application` | `applicationId`, `versionCode/Name`, `compileSdk`, `minSdk`, `targetSdk`, `compileOptions` (source/target), `ndkVersion`, `manifestPlaceholders["appName"]`, `resourceConfigurations` |
+| Any subproject with `com.android.library` (not KMP) | `compileSdk`, `minSdk`, `compileOptions`, `ndkVersion`, `resourceConfigurations` |
+| Any subproject with `org.jetbrains.kotlin.multiplatform` | `syncIosConfig` hooked into `linkPod*FrameworkIos*` + `embedAndSignAppleFrameworkForXcode` tasks |
+| iOS pbxproj (rewritten in place) | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`, `INFOPLIST_KEY_CFBundleDisplayName`, `PRODUCT_BUNDLE_IDENTIFIER`, `knownRegions` |
 
-```properties
-gpr.user=yuroyami
-gpr.key=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+`versionCode` is derived from `versionName` via the formula
+`"1" + dot-segments-padded-to-3` (e.g. `0.3.0` → `1000003000`).
+
+## Known wrinkle: KMP library modules
+
+If a module combines the Kotlin Multiplatform plugin with an `android()`
+target, KGP 2.3 runs its own `compileSdk` validator that the plugin can't
+currently reach. Forward the value from the root:
+
+```kotlin
+// shared/build.gradle.kts
+import com.yuroyami.kmpssot.KmpSsotExtension
+val ssot = rootProject.extensions.getByType(KmpSsotExtension::class.java)
+
+kotlin {
+    android {
+        compileSdk { version = release(ssot.compileSdk.get()) }
+        minSdk = ssot.minSdk.get()
+        // everything else still auto-wired by the plugin
+    }
+}
 ```
 
-Or export `GITHUB_ACTOR` / `GITHUB_TOKEN` in the environment (which is what CI
-usually does).
+Still a single source — the value lives in the root `kmpSsot { }` block, the
+module just reads it back. A future version may close this gap by reaching
+into KGP's `KotlinAndroidTarget` directly.
 
 ---
 
 ## Publishing (maintainer only)
 
 ```bash
-./gradlew publishAllPublicationsToGitHubPackagesRepository \
-    -PkmpSsot.version=0.1.0 \
-    -Pgpr.user=yuroyami \
-    -Pgpr.key=$GITHUB_TOKEN
+# In this repo:
+GITHUB_ACTOR=yuroyami \
+GITHUB_TOKEN="$(gh auth token)" \
+  ./gradlew publishAllPublicationsToGitHubPackagesRepository
 ```
 
-GitHub Packages accepts the upload instantly — no review, no publishing delay.
-
----
+GitHub Packages has no review queue — publishes are instant. Bump the version
+in `build.gradle.kts` (`kmpSsot.version`) before republishing; existing
+versions are immutable.
 
 ## Design notes
 
-- `versionCode` is derived, not declared. The formula is
-  `"1" + dot-segments-zero-padded-to-3`, matching the syncplay-mobile convention
-  (`0.3.0` → `1000003000`). Monotonically increasing for any semver bump.
-- The plugin touches `project.pbxproj` with idempotent regex replacements —
-  writes only occur when values actually change, so file timestamps are stable.
-- Android wiring happens in `afterEvaluate` so the consumer's `kmpSsot { }`
-  block is fully parsed first.
-- `ndkVersion` is optional — set it only when the consumer needs native deps
-  (e.g. an app using MPV or a JNI bridge).
+- Android values are set **eagerly**, inside the `plugins.withId("com.android.*")`
+  callback — not in `afterEvaluate`, not in `finalizeDsl`. AGP 9 and KGP 2.x
+  both validate their DSL before either of those hooks runs.
+- iOS `pbxproj` rewrites are **idempotent** — no file write occurs if values
+  already match, so timestamps stay stable.
+- The plugin deliberately does not auto-apply `kotlin("multiplatform")` or any
+  Android plugin. It listens for them; consumers decide the plugin list.
