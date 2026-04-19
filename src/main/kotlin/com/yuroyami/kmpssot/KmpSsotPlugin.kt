@@ -1,7 +1,7 @@
 package com.yuroyami.kmpssot
 
-import com.android.build.api.variant.ApplicationAndroidComponentsExtension
-import com.android.build.api.variant.LibraryAndroidComponentsExtension
+import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.dsl.LibraryExtension
 import org.gradle.api.JavaVersion
 import org.gradle.api.Plugin
 import org.gradle.api.Project
@@ -100,57 +100,55 @@ class KmpSsotPlugin : Plugin<Project> {
     }
 
     // --- Android application wiring -----------------------------------------
+    //
+    // We configure eagerly inside the plugins.withId callback (which fires the
+    // moment AGP is applied, before the subproject's own android { } block runs).
+    // AGP 9 and KGP 2.x both have strict validators that reject an unset
+    // compileSdk, and those validators run *before* finalizeDsl would fire —
+    // so setting values here, up-front, is the only reliable window.
 
     private fun wireAndroidApp(project: Project, ext: KmpSsotExtension) {
-        val components = project.extensions
-            .getByType(ApplicationAndroidComponentsExtension::class.java)
+        val android = project.extensions.getByType(ApplicationExtension::class.java)
 
-        components.finalizeDsl { android ->
-            android.compileSdk = ext.compileSdk.get()
-            ext.ndkVersion.orNull?.let { android.ndkVersion = it }
+        android.compileSdk = ext.compileSdk.get()
+        ext.ndkVersion.orNull?.let { android.ndkVersion = it }
 
-            if (ext.propagateBundleId.get()) {
-                android.defaultConfig.applicationId = ext.androidApplicationId.get()
-            }
+        android.defaultConfig.apply {
+            if (ext.propagateBundleId.get()) applicationId = ext.androidApplicationId.get()
             if (ext.propagateVersion.get()) {
-                android.defaultConfig.versionCode = ext.versionCode.get()
-                android.defaultConfig.versionName = ext.versionName.get()
+                versionCode = ext.versionCode.get()
+                versionName = ext.versionName.get()
             }
-            android.defaultConfig.minSdk = ext.minSdk.get()
-            android.defaultConfig.targetSdk = ext.targetSdk.orNull ?: ext.compileSdk.get()
-            if (ext.propagateAppName.get()) {
-                android.defaultConfig.manifestPlaceholders["appName"] = ext.appName.get()
-            }
+            minSdk = ext.minSdk.get()
+            targetSdk = ext.targetSdk.orNull ?: ext.compileSdk.get()
+            if (ext.propagateAppName.get()) manifestPlaceholders["appName"] = ext.appName.get()
             if (ext.propagateLocaleList.get()) {
                 val l = ext.locales.get()
-                if (l.isNotEmpty()) android.defaultConfig.resourceConfigurations.addAll(l)
+                if (l.isNotEmpty()) resourceConfigurations.addAll(l)
             }
-
-            val jv = JavaVersion.toVersion(ext.javaVersion.get())
-            android.compileOptions.sourceCompatibility = jv
-            android.compileOptions.targetCompatibility = jv
         }
+
+        val jv = JavaVersion.toVersion(ext.javaVersion.get())
+        android.compileOptions.sourceCompatibility = jv
+        android.compileOptions.targetCompatibility = jv
     }
 
     // --- Android library wiring ---------------------------------------------
 
     private fun wireAndroidLibrary(project: Project, ext: KmpSsotExtension) {
-        val components = project.extensions
-            .getByType(LibraryAndroidComponentsExtension::class.java)
+        val android = project.extensions.getByType(LibraryExtension::class.java)
 
-        components.finalizeDsl { android ->
-            android.compileSdk = ext.compileSdk.get()
-            ext.ndkVersion.orNull?.let { android.ndkVersion = it }
+        android.compileSdk = ext.compileSdk.get()
+        ext.ndkVersion.orNull?.let { android.ndkVersion = it }
 
-            android.defaultConfig.minSdk = ext.minSdk.get()
-            if (ext.propagateLocaleList.get()) {
-                val l = ext.locales.get()
-                if (l.isNotEmpty()) android.defaultConfig.resourceConfigurations.addAll(l)
-            }
-
-            val jv = JavaVersion.toVersion(ext.javaVersion.get())
-            android.compileOptions.sourceCompatibility = jv
-            android.compileOptions.targetCompatibility = jv
+        android.defaultConfig.minSdk = ext.minSdk.get()
+        if (ext.propagateLocaleList.get()) {
+            val l = ext.locales.get()
+            if (l.isNotEmpty()) android.defaultConfig.resourceConfigurations.addAll(l)
         }
+
+        val jv = JavaVersion.toVersion(ext.javaVersion.get())
+        android.compileOptions.sourceCompatibility = jv
+        android.compileOptions.targetCompatibility = jv
     }
 }
