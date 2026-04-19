@@ -45,7 +45,8 @@ class KmpSsotPlugin : Plugin<Project> {
 
     private fun registerSyncIosTask(target: Project, ext: KmpSsotExtension) {
         val syncIos = target.tasks.register<SyncIosConfigTask>("syncIosConfig") {
-            pbxprojFile.set(target.layout.projectDirectory.file(ext.iosProjectPath))
+            // iosApp/ lives at the KMP project root, not in the module applying this plugin.
+            pbxprojFile.set(target.rootProject.layout.projectDirectory.file(ext.iosProjectPath))
             versionName.set(ext.versionName)
             versionCode.set(ext.versionCode)
             appName.set(ext.appName)
