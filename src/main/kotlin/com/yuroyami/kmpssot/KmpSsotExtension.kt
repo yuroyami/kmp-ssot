@@ -1,5 +1,6 @@
 package com.yuroyami.kmpssot
 
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
@@ -8,42 +9,11 @@ import org.gradle.api.provider.Provider
  * DSL for the kmp-ssot plugin. Applied to the **root project** only.
  *
  * Every identity field is optional. A field gets propagated iff (a) its
- * `propagate*` toggle is true (default true) AND (b) the value is actually
- * set. Leave a field unset to opt out of that piece of propagation
- * completely — the plugin won't touch the corresponding platform settings.
+ * `propagate*` toggle is true (default true) AND (b) the value is set.
+ * Leave a field unset to opt out of that piece of propagation completely.
  *
- * Usage in the root build.gradle.kts:
- * ```
- * kmpSsot {
- *     appName      = "Jetzy"
- *     versionName  = "0.3.0"
- *     bundleIdBase = "com.yuroyami.jetzy"
- *
- *     // Module structure.
- *     sharedModule     = "shared"     // REQUIRED — KMP shared module dir name
- *     androidAppModule = "androidApp" // default "androidApp"
- *
- *     // Bundle ID suffixes are both null by default. When bundleIdBase is
- *     // set, applicationId = "${bundleIdBase}${androidApplicationIdSuffix}"
- *     // (same shape for iOS). With both suffixes null, both platforms share
- *     // one ID. Set them when you want platform-specific differentiation.
- *     iosBundleSuffix            = ".ios"    // or null
- *     androidApplicationIdSuffix = null      // or ".android", etc.
- *
- *     javaVersion = 21
- *
- *     // Auto-detected from {sharedModule}/src/commonMain/composeResources/values-*.
- *     // Set explicitly to override.
- *     // locales = listOf("en", "ar", "fr")
- *
- *     // Toggles — all default true.
- *     // propagateAppName    = true
- *     // propagateBundleId   = true
- *     // propagateVersion    = true
- *     // propagateLocaleList = true
- *     // syncIos             = true
- * }
- * ```
+ * App logo: set both [appLogoXml] and [appLogoPng] to enable logo propagation,
+ * or leave both unset. Setting only one fails configuration.
  */
 abstract class KmpSsotExtension {
 
@@ -68,7 +38,6 @@ abstract class KmpSsotExtension {
     /**
      * Locales supported by the app. Defaults to auto-detection from
      * `{sharedModule}/src/commonMain/composeResources/values-*` directories.
-     * Set explicitly to override auto-detection.
      */
     abstract val locales: ListProperty<String>
 
@@ -77,13 +46,42 @@ abstract class KmpSsotExtension {
     /** KMP shared module directory name (e.g. "shared", "composeApp"). REQUIRED. */
     abstract val sharedModule: Property<String>
 
-    /** Android application module directory name (e.g. "androidApp", "app"). Defaults to "androidApp". */
+    /** Android application module directory name. Defaults to "androidApp". */
     abstract val androidAppModule: Property<String>
+
+    // --- App logo -------------------------------------------------------------
+
+    /**
+     * Source XML vector drawable for the app logo. Propagated to Android as:
+     *  - `${androidAppModule}/src/main/res/drawable/ic_launcher.xml`
+     *  - `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`
+     *    (adaptive icon wrapper referencing the drawable + background color)
+     *  - `${sharedModule}/src/commonMain/composeResources/drawable/ic_launcher.xml`
+     *    (so Compose `vectorResource(Res.drawable.ic_launcher)` works)
+     */
+    abstract val appLogoXml: RegularFileProperty
+
+    /**
+     * Source PNG (ideally 1024x1024) for the iOS app icon. Propagated to
+     * `iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
+     * with a single-image universal `Contents.json`. Source is automatically
+     * resized to 1024x1024 if it isn't already.
+     */
+    abstract val appLogoPng: RegularFileProperty
+
+    /**
+     * Background color for the Android adaptive icon wrapper. Hex string.
+     * Defaults to `"#FFFFFF"`.
+     */
+    abstract val appLogoBackgroundColor: Property<String>
 
     // --- File paths -----------------------------------------------------------
 
     /** Path (relative to root project) to the iOS Xcode project file. */
     abstract val iosProjectPath: Property<String>
+
+    /** Path (relative to root project) to the iOS Podfile. */
+    abstract val iosPodfilePath: Property<String>
 
     // --- Toggles (all default true) ------------------------------------------
 
@@ -91,6 +89,8 @@ abstract class KmpSsotExtension {
     abstract val propagateBundleId: Property<Boolean>
     abstract val propagateVersion: Property<Boolean>
     abstract val propagateLocaleList: Property<Boolean>
+    abstract val propagateLogo: Property<Boolean>
+    abstract val propagateSharedModule: Property<Boolean>
 
     /** Master switch for the iOS pbxproj rewrite task. If false, no iOS sync happens at all. */
     abstract val syncIos: Property<Boolean>

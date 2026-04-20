@@ -20,42 +20,54 @@ class KmpSsotPlugin : Plugin<Project> {
         }
 
         val ext = target.extensions.create<KmpSsotExtension>("kmpSsot").apply {
-            // Suffixes: null by default. When unset, applicationId/bundleId = bundleIdBase raw.
-            // The .orElse("") in the extension's derived providers makes this concatenate cleanly.
             javaVersion.convention(21)
             iosProjectPath.convention("iosApp/iosApp.xcodeproj/project.pbxproj")
+            iosPodfilePath.convention("iosApp/Podfile")
             androidAppModule.convention("androidApp")
+            appLogoBackgroundColor.convention("#FFFFFF")
             propagateAppName.convention(true)
             propagateBundleId.convention(true)
             propagateVersion.convention(true)
             propagateLocaleList.convention(true)
+            propagateLogo.convention(true)
+            propagateSharedModule.convention(true)
             syncIos.convention(true)
 
             // Auto-detect locales from {sharedModule}/src/commonMain/composeResources/values-*.
-            // Lazy: the provider is only evaluated when locales is read, by which point
-            // sharedModule must be set (we validate that in afterEvaluate below).
             locales.convention(target.provider { autoDetectLocales(target, this) })
         }
 
-        // Enforce sharedModule presence at the latest responsible moment.
         target.afterEvaluate {
             if (!ext.sharedModule.isPresent) {
                 throw GradleException(
-                    "kmpSsot { sharedModule = \"...\" } is required. " +
-                            "Set it to the directory name of your KMP shared module " +
-                            "(e.g. \"shared\" or \"composeApp\") in the root build.gradle.kts."
+                    "kmpSsot { sharedModule = \"...\" } is required. Set it to the directory " +
+                            "name of your KMP shared module (e.g. \"shared\" or \"composeApp\")."
+                )
+            }
+            // Logo: enforce paired-or-neither.
+            val xmlSet = ext.appLogoXml.isPresent
+            val pngSet = ext.appLogoPng.isPresent
+            if (xmlSet xor pngSet) {
+                throw GradleException(
+                    "kmpSsot { appLogoXml + appLogoPng } must be set together. " +
+                            "Either provide both (Android XML + iOS PNG) or neither."
                 )
             }
         }
 
         val syncIosTask = registerSyncIosTask(target, ext)
+        val syncIosLogoTask = registerSyncIosLogoTask(target, ext)
+        val syncAndroidLogoTask = registerSyncAndroidLogoTask(target, ext)
 
         target.subprojects {
             val sub = this
-            plugins.withId("com.android.application") { wireAndroidApp(sub, ext) }
+            plugins.withId("com.android.application") {
+                wireAndroidApp(sub, ext)
+                hookAndroidLogoTask(sub, syncAndroidLogoTask, ext)
+            }
             plugins.withId("com.android.library") { wireAndroidLibrary(sub, ext) }
             plugins.withId("org.jetbrains.kotlin.multiplatform") {
-                hookIosFrameworkTasks(sub, syncIosTask, ext)
+                hookIosFrameworkTasks(sub, syncIosTask, syncIosLogoTask, ext)
             }
         }
     }
@@ -75,7 +87,7 @@ class KmpSsotPlugin : Plugin<Project> {
             ?: emptyList()
     }
 
-    // --- iOS pbxproj task ----------------------------------------------------
+    // --- Task registration --------------------------------------------------
 
     private fun registerSyncIosTask(
         root: Project,
@@ -84,28 +96,78 @@ class KmpSsotPlugin : Plugin<Project> {
         root.tasks.register<SyncIosConfigTask>("syncIosConfig") {
             onlyIf { ext.syncIos.get() }
             pbxprojFile.set(root.layout.projectDirectory.file(ext.iosProjectPath))
+            podfile.set(root.layout.projectDirectory.file(ext.iosPodfilePath))
+            iosAppDir.set(root.layout.projectDirectory.dir("iosApp"))
             versionName.set(ext.versionName)
             versionCode.set(ext.versionCode)
             appName.set(ext.appName)
             if (ext.bundleIdBase.isPresent) bundleId.set(ext.iosBundleId)
             locales.set(ext.locales)
+            sharedModule.set(ext.sharedModule)
             propagateVersion.set(ext.propagateVersion)
             propagateAppName.set(ext.propagateAppName)
             propagateBundleId.set(ext.propagateBundleId)
             propagateLocaleList.set(ext.propagateLocaleList)
+            propagateSharedModule.set(ext.propagateSharedModule)
         }
+
+    private fun registerSyncIosLogoTask(
+        root: Project,
+        ext: KmpSsotExtension,
+    ): TaskProvider<SyncIosLogoTask> =
+        root.tasks.register<SyncIosLogoTask>("syncIosLogo") {
+            onlyIf { ext.syncIos.get() && ext.propagateLogo.get() && ext.appLogoPng.isPresent }
+            sourcePng.set(ext.appLogoPng)
+            appiconsetDir.set(root.layout.projectDirectory.dir("iosApp/iosApp/Assets.xcassets/AppIcon.appiconset"))
+        }
+
+    private fun registerSyncAndroidLogoTask(
+        root: Project,
+        ext: KmpSsotExtension,
+    ): TaskProvider<SyncAndroidLogoTask> =
+        root.tasks.register<SyncAndroidLogoTask>("syncAndroidLogo") {
+            onlyIf { ext.propagateLogo.get() && ext.appLogoXml.isPresent }
+            sourceXml.set(ext.appLogoXml)
+            // Resolve target dirs lazily — sharedModule may not be set yet at register time.
+            androidResDir.set(root.layout.projectDirectory.dir(
+                ext.androidAppModule.map { "$it/src/main/res" }
+            ))
+            composeResourcesDir.set(root.layout.projectDirectory.dir(
+                ext.sharedModule.map { "$it/src/commonMain/composeResources" }
+            ))
+            backgroundColor.set(ext.appLogoBackgroundColor)
+        }
+
+    // --- Hooking new tasks --------------------------------------------------
 
     private fun hookIosFrameworkTasks(
         project: Project,
         syncIosTask: TaskProvider<SyncIosConfigTask>,
+        syncIosLogoTask: TaskProvider<SyncIosLogoTask>,
         ext: KmpSsotExtension,
     ) {
         if (!ext.syncIos.get()) return
-        project.tasks.matching {
+        val iosTaskFilter: (org.gradle.api.Task) -> Boolean = {
             it.name.startsWith("linkPodReleaseFrameworkIos") ||
                     it.name.startsWith("linkPodDebugFrameworkIos") ||
                     it.name == "embedAndSignAppleFrameworkForXcode"
-        }.configureEach { dependsOn(syncIosTask) }
+        }
+        project.tasks.matching(iosTaskFilter).configureEach {
+            dependsOn(syncIosTask)
+            dependsOn(syncIosLogoTask)
+        }
+    }
+
+    private fun hookAndroidLogoTask(
+        project: Project,
+        syncAndroidLogoTask: TaskProvider<SyncAndroidLogoTask>,
+        ext: KmpSsotExtension,
+    ) {
+        if (!ext.propagateLogo.get()) return
+        // preBuild runs before resource processing — we want logo files in place by then.
+        project.tasks.matching { it.name == "preBuild" }.configureEach {
+            dependsOn(syncAndroidLogoTask)
+        }
     }
 
     // --- Android application wiring -----------------------------------------
