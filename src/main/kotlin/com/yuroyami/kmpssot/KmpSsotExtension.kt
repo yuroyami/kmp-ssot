@@ -7,11 +7,10 @@ import org.gradle.api.provider.Provider
 /**
  * DSL for the kmp-ssot plugin. Applied to the **root project** only.
  *
- * Scope: genuinely cross-platform identity (app name, version, bundle ID,
- * locales) plus shared toolchain bits (Java version). Android-only toolchain
- * (compileSdk, minSdk, targetSdk, ndkVersion) is intentionally **not** here —
- * those belong in each Android module where they are actually relevant, and
- * keeping them out sidesteps KGP 2.3's android-target validator entirely.
+ * Every identity field is optional. A field gets propagated iff (a) its
+ * `propagate*` toggle is true (default true) AND (b) the value is actually
+ * set. Leave a field unset to opt out of that piece of propagation
+ * completely — the plugin won't touch the corresponding platform settings.
  *
  * Usage in the root build.gradle.kts:
  * ```
@@ -20,10 +19,22 @@ import org.gradle.api.provider.Provider
  *     versionName  = "0.3.0"
  *     bundleIdBase = "com.yuroyami.jetzy"
  *
- *     iosBundleSuffix = ".ios"
- *     javaVersion     = 21
+ *     // Module structure.
+ *     sharedModule     = "shared"     // REQUIRED — KMP shared module dir name
+ *     androidAppModule = "androidApp" // default "androidApp"
  *
- *     locales = listOf("en", "ar", "fr")
+ *     // Bundle ID suffixes are both null by default. When bundleIdBase is
+ *     // set, applicationId = "${bundleIdBase}${androidApplicationIdSuffix}"
+ *     // (same shape for iOS). With both suffixes null, both platforms share
+ *     // one ID. Set them when you want platform-specific differentiation.
+ *     iosBundleSuffix            = ".ios"    // or null
+ *     androidApplicationIdSuffix = null      // or ".android", etc.
+ *
+ *     javaVersion = 21
+ *
+ *     // Auto-detected from {sharedModule}/src/commonMain/composeResources/values-*.
+ *     // Set explicitly to override.
+ *     // locales = listOf("en", "ar", "fr")
  *
  *     // Toggles — all default true.
  *     // propagateAppName    = true
@@ -42,7 +53,10 @@ abstract class KmpSsotExtension {
     abstract val versionName: Property<String>
     abstract val bundleIdBase: Property<String>
 
+    /** Suffix appended to bundleIdBase for the iOS bundle id. Null = no suffix. */
     abstract val iosBundleSuffix: Property<String>
+
+    /** Suffix appended to bundleIdBase for the Android applicationId. Null = no suffix. */
     abstract val androidApplicationIdSuffix: Property<String>
 
     // --- Shared toolchain (cross-platform) -----------------------------------
@@ -51,8 +65,20 @@ abstract class KmpSsotExtension {
 
     // --- Localization ---------------------------------------------------------
 
-    /** Locales supported by the app (BCP-47-ish tags, e.g. "en", "fr", "pt-BR"). */
+    /**
+     * Locales supported by the app. Defaults to auto-detection from
+     * `{sharedModule}/src/commonMain/composeResources/values-*` directories.
+     * Set explicitly to override auto-detection.
+     */
     abstract val locales: ListProperty<String>
+
+    // --- Module structure ----------------------------------------------------
+
+    /** KMP shared module directory name (e.g. "shared", "composeApp"). REQUIRED. */
+    abstract val sharedModule: Property<String>
+
+    /** Android application module directory name (e.g. "androidApp", "app"). Defaults to "androidApp". */
+    abstract val androidAppModule: Property<String>
 
     // --- File paths -----------------------------------------------------------
 

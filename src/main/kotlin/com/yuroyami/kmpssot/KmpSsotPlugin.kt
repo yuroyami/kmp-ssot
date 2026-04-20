@@ -2,6 +2,7 @@ package com.yuroyami.kmpssot
 
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.dsl.LibraryExtension
+import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
 import org.gradle.api.Plugin
 import org.gradle.api.Project
@@ -10,17 +11,6 @@ import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
 
-/**
- * Single source of truth for KMP app identity. Applied once at the **root project**.
- *
- * Every identity field in `kmpSsot { }` is optional. A field gets propagated
- * iff (a) its `propagate*` toggle is true (default true) AND (b) the value
- * is actually set in the DSL. This means you can apply the plugin to a
- * production app and declare only the bits you want centralized — e.g.
- * `versionName` + `locales` + `appName`, leaving `bundleIdBase` unset so the
- * already-registered Android applicationId and iOS PRODUCT_BUNDLE_IDENTIFIER
- * are never touched.
- */
 class KmpSsotPlugin : Plugin<Project> {
 
     override fun apply(target: Project) {
@@ -30,16 +20,32 @@ class KmpSsotPlugin : Plugin<Project> {
         }
 
         val ext = target.extensions.create<KmpSsotExtension>("kmpSsot").apply {
-            iosBundleSuffix.convention(".iosApp")
-            androidApplicationIdSuffix.convention("")
+            // Suffixes: null by default. When unset, applicationId/bundleId = bundleIdBase raw.
+            // The .orElse("") in the extension's derived providers makes this concatenate cleanly.
             javaVersion.convention(21)
             iosProjectPath.convention("iosApp/iosApp.xcodeproj/project.pbxproj")
-            locales.convention(emptyList())
+            androidAppModule.convention("androidApp")
             propagateAppName.convention(true)
             propagateBundleId.convention(true)
             propagateVersion.convention(true)
             propagateLocaleList.convention(true)
             syncIos.convention(true)
+
+            // Auto-detect locales from {sharedModule}/src/commonMain/composeResources/values-*.
+            // Lazy: the provider is only evaluated when locales is read, by which point
+            // sharedModule must be set (we validate that in afterEvaluate below).
+            locales.convention(target.provider { autoDetectLocales(target, this) })
+        }
+
+        // Enforce sharedModule presence at the latest responsible moment.
+        target.afterEvaluate {
+            if (!ext.sharedModule.isPresent) {
+                throw GradleException(
+                    "kmpSsot { sharedModule = \"...\" } is required. " +
+                            "Set it to the directory name of your KMP shared module " +
+                            "(e.g. \"shared\" or \"composeApp\") in the root build.gradle.kts."
+                )
+            }
         }
 
         val syncIosTask = registerSyncIosTask(target, ext)
@@ -54,6 +60,21 @@ class KmpSsotPlugin : Plugin<Project> {
         }
     }
 
+    // --- Locale auto-detection ----------------------------------------------
+
+    private fun autoDetectLocales(root: Project, ext: KmpSsotExtension): List<String> {
+        if (!ext.sharedModule.isPresent) return emptyList()
+        val sharedDir = root.file(ext.sharedModule.get())
+        val composeRes = sharedDir.resolve("src/commonMain/composeResources")
+        if (!composeRes.isDirectory) return emptyList()
+        return composeRes
+            .listFiles { f -> f.isDirectory && f.name.startsWith("values-") }
+            ?.map { it.name.removePrefix("values-") }
+            ?.distinct()
+            ?.sorted()
+            ?: emptyList()
+    }
+
     // --- iOS pbxproj task ----------------------------------------------------
 
     private fun registerSyncIosTask(
@@ -66,8 +87,6 @@ class KmpSsotPlugin : Plugin<Project> {
             versionName.set(ext.versionName)
             versionCode.set(ext.versionCode)
             appName.set(ext.appName)
-            // Only set bundleId if bundleIdBase is present; otherwise leave unset
-            // so the task's isPresent check skips PRODUCT_BUNDLE_IDENTIFIER rewrites.
             if (ext.bundleIdBase.isPresent) bundleId.set(ext.iosBundleId)
             locales.set(ext.locales)
             propagateVersion.set(ext.propagateVersion)
