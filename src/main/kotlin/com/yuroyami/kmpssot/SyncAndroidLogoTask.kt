@@ -9,11 +9,15 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
 
 /**
- * Propagates [sourceXml] (a vector drawable) to:
+ * Propagates [sourceXml] (a vector drawable) to the Android res tree:
  *  - `${androidResDir}/drawable/ic_launcher.xml`
- *  - `${androidResDir}/mipmap-anydpi-v26/ic_launcher.xml` (adaptive icon wrapper)
+ *  - `${androidResDir}/mipmap-anydpi-v26/ic_launcher{,_round}.xml` (adaptive icon wrappers)
  *  - `${androidResDir}/values/ic_launcher_background.xml` (color resource)
- *  - `${composeResourcesDir}/drawable/ic_launcher.xml` (for Compose vectorResource)
+ *
+ * Does NOT touch `commonMain/composeResources/`. If the user wants the same
+ * vector drawable available to Compose via `vectorResource(...)`, they own
+ * placement of the source file under their `composeResources/` themselves —
+ * the plugin's scope is pure Android + iOS platform propagation.
  *
  * Idempotent — files are only rewritten if their content actually changes.
  */
@@ -28,7 +32,6 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
 
     @get:Internal abstract val sourceXml: RegularFileProperty
     @get:Internal abstract val androidResDir: DirectoryProperty
-    @get:Internal abstract val composeResourcesDir: DirectoryProperty
     @get:Internal abstract val backgroundColor: Property<String>
 
     @TaskAction
@@ -59,10 +62,6 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
             resDir.resolve("values/ic_launcher_background.xml"),
             buildBackgroundColorXml(backgroundColor.get())
         )
-
-        // 4. composeResources/drawable/ic_launcher.xml — for Compose vectorResource
-        val composeDir = composeResourcesDir.asFile.get()
-        writeIfChanged(composeDir.resolve("drawable/ic_launcher.xml"), sourceContent)
 
         logger.lifecycle("[kmpSsot] Android logo synced from ${src.name}.")
     }

@@ -135,9 +135,13 @@ icon end-to-end:
 
 **Android (`syncAndroidLogo`)** — propagates the source XML vector drawable to:
 - `${androidAppModule}/src/main/res/drawable/ic_launcher.xml` — direct copy
-- `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml` — adaptive icon wrapper
+- `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml` — adaptive icon wrappers
 - `${androidAppModule}/src/main/res/values/ic_launcher_background.xml` — color resource (controlled by `appLogoBackgroundColor`)
-- `${sharedModule}/src/commonMain/composeResources/drawable/ic_launcher.xml` — for Compose `vectorResource(Res.drawable.ic_launcher)`
+
+The plugin's scope is pure Android + iOS platform propagation — it does **not**
+copy the vector into `commonMain/composeResources/`. If you want the same
+drawable available to Compose via `vectorResource(...)`, place it in
+`composeResources/drawable/` yourself; that's user-owned territory.
 
 Hooked into Android `preBuild` so files are in place by resource processing.
 
@@ -220,7 +224,6 @@ The list propagates to:
 | iOS `iosApp/**/*.swift` (when `sharedModule` differs) | plain `import X` statements |
 | iOS `AppIcon.appiconset/` | `AppIcon-1024.png` (resized) + `Contents.json` (universal) |
 | Android `${androidAppModule}/src/main/res/` | `drawable/ic_launcher.xml`, `mipmap-anydpi-v26/ic_launcher{,_round}.xml`, `values/ic_launcher_background.xml` |
-| Compose `${sharedModule}/src/commonMain/composeResources/` | `drawable/ic_launcher.xml` |
 
 `versionCode` is derived from `versionName` via the formula
 `"1" + dot-segments-padded-to-3` (e.g. `0.3.0` → `1000003000`).

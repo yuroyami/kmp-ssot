@@ -128,12 +128,9 @@ class KmpSsotPlugin : Plugin<Project> {
         root.tasks.register<SyncAndroidLogoTask>("syncAndroidLogo") {
             onlyIf { ext.propagateLogo.get() && ext.appLogoXml.isPresent }
             sourceXml.set(ext.appLogoXml)
-            // Resolve target dirs lazily — sharedModule may not be set yet at register time.
+            // Resolve lazily — androidAppModule may not be set yet at register time.
             androidResDir.set(root.layout.projectDirectory.dir(
                 ext.androidAppModule.map { "$it/src/main/res" }
-            ))
-            composeResourcesDir.set(root.layout.projectDirectory.dir(
-                ext.sharedModule.map { "$it/src/commonMain/composeResources" }
             ))
             backgroundColor.set(ext.appLogoBackgroundColor)
         }

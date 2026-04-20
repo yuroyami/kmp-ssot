@@ -52,12 +52,16 @@ abstract class KmpSsotExtension {
     // --- App logo -------------------------------------------------------------
 
     /**
-     * Source XML vector drawable for the app logo. Propagated to Android as:
+     * Source XML vector drawable for the app logo. Propagated to Android only:
      *  - `${androidAppModule}/src/main/res/drawable/ic_launcher.xml`
-     *  - `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`
-     *    (adaptive icon wrapper referencing the drawable + background color)
-     *  - `${sharedModule}/src/commonMain/composeResources/drawable/ic_launcher.xml`
-     *    (so Compose `vectorResource(Res.drawable.ic_launcher)` works)
+     *  - `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml`
+     *    (adaptive icon wrappers referencing the drawable + background color)
+     *  - `${androidAppModule}/src/main/res/values/ic_launcher_background.xml`
+     *    (color resource for the adaptive icon background)
+     *
+     * If you want the same vector available to Compose via `vectorResource(...)`,
+     * place a copy in your `composeResources/drawable/` yourself — the plugin
+     * deliberately does not propagate into Compose resources.
      */
     abstract val appLogoXml: RegularFileProperty
 
