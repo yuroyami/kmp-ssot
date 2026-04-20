@@ -41,7 +41,7 @@ the plugin without environment variables.
 ```kotlin
 // <root>/build.gradle.kts
 plugins {
-    id("com.yuroyami.kmpssot") version "0.5.0"
+    id("com.yuroyami.kmpssot") version "0.6.0"
     // ...your other plugins, typically with .apply(false)...
 }
 
@@ -65,12 +65,19 @@ kmpSsot {
     // Explicit list overrides.
     // locales = listOf("en", "ar", "fr")
 
+    // App logo — both required if logo propagation is desired, or both null.
+    // appLogoXml = file("art/ic_launcher.xml")    // vector drawable for Android + Compose
+    // appLogoPng = file("art/ic_launcher.png")    // for iOS AppIcon (resized to 1024 if needed)
+    // appLogoBackgroundColor = "#FFFFFF"          // adaptive icon background
+
     // Toggles — all default true. Flip a single flag to opt out.
-    // propagateAppName     = true
-    // propagateBundleId    = true
-    // propagateVersion     = true
-    // propagateLocaleList  = true
-    // syncIos              = true
+    // propagateAppName       = true
+    // propagateBundleId      = true
+    // propagateVersion       = true
+    // propagateLocaleList    = true
+    // propagateLogo          = true
+    // propagateSharedModule  = true
+    // syncIos                = true
 }
 ```
 
@@ -121,6 +128,69 @@ kotlin.android {
 
 ---
 
+## App logo
+
+When both `appLogoXml` and `appLogoPng` are set, the plugin owns the launcher
+icon end-to-end:
+
+**Android (`syncAndroidLogo`)** — propagates the source XML vector drawable to:
+- `${androidAppModule}/src/main/res/drawable/ic_launcher.xml` — direct copy
+- `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml` — adaptive icon wrapper
+- `${androidAppModule}/src/main/res/values/ic_launcher_background.xml` — color resource (controlled by `appLogoBackgroundColor`)
+- `${sharedModule}/src/commonMain/composeResources/drawable/ic_launcher.xml` — for Compose `vectorResource(Res.drawable.ic_launcher)`
+
+Hooked into Android `preBuild` so files are in place by resource processing.
+
+**iOS (`syncIosLogo`)** — takes the source PNG, resizes to 1024×1024
+(bicubic, antialiased) if needed, writes:
+- `iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
+- A single-image universal `Contents.json`
+
+Requires iOS deployment target 14+ (single-size universal icon, Xcode handles
+the down-scaling at build time).
+
+Hooked into the iOS framework link tasks so the icon ships with every iOS build.
+
+If you set only one of the two logo properties, the build fails at
+`afterEvaluate` — pair them, or leave both unset.
+
+---
+
+## Shared module rename SSOT
+
+`sharedModule` is the directory name of the KMP shared module — required.
+When you rename it (say from `shared` to `composeApp`):
+
+1. Rename the directory and update `settings.gradle.kts` `include(":...")`.
+2. Update `kmpSsot { sharedModule = "composeApp" }` in the root build file.
+3. Reference it in your shared module's cocoapods `baseName`:
+   ```kotlin
+   // shared (or composeApp)/build.gradle.kts
+   val ssot = rootProject.extensions.getByType<com.yuroyami.kmpssot.KmpSsotExtension>()
+   kotlin {
+       cocoapods {
+           framework { baseName = ssot.sharedModule.get() }
+       }
+   }
+   ```
+4. Run `./gradlew syncIosConfig`.
+
+The plugin detects the old name from the existing `iosApp/Podfile` line
+(`pod 'X', :path => '../X'`) and rewrites:
+- The Podfile `pod` name + `:path =>` references
+- Every `import X` (plain form) in `iosApp/**/*.swift`
+
+Then `pod install` in `iosApp/` (or `./gradlew :${sharedModule}:podInstall`)
+refreshes the Pods workspace from the new podspec — the
+`Pods.xcodeproj`, the iOS app's pbxproj linker entries, and the generated
+podspec all rebuild from there, so no further manual rewrites.
+
+`@_implementationOnly import` and Bridging-Header `#import <X/X.h>` are
+*not* touched — the regex is intentionally narrow. Edit those by hand if
+they exist in your project.
+
+---
+
 ## Auto-detected locales
 
 When `locales` is not explicitly set, the plugin scans
@@ -144,8 +214,13 @@ The list propagates to:
 |---|---|
 | `com.android.application` | `applicationId` (when bundleIdBase set), `versionCode/Name` (when versionName set), `compileOptions` source/target from `javaVersion`, `manifestPlaceholders["appName"]` (when appName set), `resourceConfigurations` (from `locales`) |
 | `com.android.library` | `compileOptions`, `resourceConfigurations` |
-| `org.jetbrains.kotlin.multiplatform` | `syncIosConfig` hooked into `linkPod*FrameworkIos*` + `embedAndSignAppleFrameworkForXcode` |
+| `org.jetbrains.kotlin.multiplatform` | `syncIosConfig` + `syncIosLogo` hooked into `linkPod*FrameworkIos*` + `embedAndSignAppleFrameworkForXcode` |
 | iOS `project.pbxproj` (rewritten idempotently) | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`, `INFOPLIST_KEY_CFBundleDisplayName`, `INFOPLIST_KEY_CFBundleName`, `PRODUCT_BUNDLE_IDENTIFIER`, `knownRegions` |
+| iOS `Podfile` (when `sharedModule` differs from current pod name) | `pod 'X', :path => '../X'` lines |
+| iOS `iosApp/**/*.swift` (when `sharedModule` differs) | plain `import X` statements |
+| iOS `AppIcon.appiconset/` | `AppIcon-1024.png` (resized) + `Contents.json` (universal) |
+| Android `${androidAppModule}/src/main/res/` | `drawable/ic_launcher.xml`, `mipmap-anydpi-v26/ic_launcher{,_round}.xml`, `values/ic_launcher_background.xml` |
+| Compose `${sharedModule}/src/commonMain/composeResources/` | `drawable/ic_launcher.xml` |
 
 `versionCode` is derived from `versionName` via the formula
 `"1" + dot-segments-padded-to-3` (e.g. `0.3.0` → `1000003000`).
@@ -201,12 +276,13 @@ versions are immutable.
 
 ## Roadmap (tentative)
 
-- **App logo propagation** (v0.6.0): take a source image (PNG or SVG), generate
-  Android mipmap densities + iOS `AppIcon.appiconset` + Contents.json, update
-  `LaunchScreen.storyboard`.
-- **Shared-module rename awareness** (v0.6.0): rewrite iOS references (Podfile
-  `:path`, pbxproj paths) when `sharedModule` differs from the canonical
-  "shared" name.
+- **`localeFilters` migration** (v0.7.0): switch from the deprecated
+  `resourceConfigurations` to `androidResources.localeFilters` for AGP 9+.
 - **xcconfig-driven iOS propagation** (v0.7.0): switch from pbxproj regex
   rewrites to writing a single `kmpssot.xcconfig` the pbxproj includes —
   cleaner propagation via Xcode build settings instead of per-key edits.
+- **`force()` rename** (v0.8.0): opt-in advanced flag to actually rename the
+  shared module directory on disk + update `settings.gradle.kts`. Today the
+  plugin assumes the user has already renamed; `force()` would automate it.
+- **`LaunchScreen.storyboard` logo injection** (v0.8.0): inject the iOS
+  logo into the launch screen image view too, not just AppIcon.
