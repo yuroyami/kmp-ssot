@@ -1,4 +1,4 @@
-package com.yuroyami.kmpssot
+package io.github.yuroyami.kmpssot
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty

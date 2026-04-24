@@ -1,4 +1,4 @@
-package com.yuroyami.kmpssot
+package io.github.yuroyami.kmpssot
 
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
@@ -87,6 +87,9 @@ abstract class KmpSsotExtension {
     /** Path (relative to root project) to the iOS Podfile. */
     abstract val iosPodfilePath: Property<String>
 
+    /** Path (relative to root project) to the iOS Info.plist. */
+    abstract val iosInfoPlistPath: Property<String>
+
     // --- Toggles (all default true) ------------------------------------------
 
     abstract val propagateAppName: Property<Boolean>
@@ -98,6 +101,15 @@ abstract class KmpSsotExtension {
 
     /** Master switch for the iOS pbxproj rewrite task. If false, no iOS sync happens at all. */
     abstract val syncIos: Property<Boolean>
+
+    /**
+     * Ensure the iOS `Info.plist` has the SSOT-pointing keys the sync task relies on
+     * (`CFBundleDisplayName`, `CFBundleName`, `CFBundleShortVersionString`, `CFBundleVersion`).
+     * Append-only: never overwrites existing values — just inserts missing keys pointing at
+     * the corresponding build variable. A warning is logged if an existing value is hardcoded
+     * in a way that will defeat SSOT propagation. Default true.
+     */
+    abstract val sanitizeIosProject: Property<Boolean>
 
     // --- Derived values (read-only) ------------------------------------------
 

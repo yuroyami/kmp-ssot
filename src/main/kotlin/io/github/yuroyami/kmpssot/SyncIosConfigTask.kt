@@ -1,4 +1,4 @@
-package com.yuroyami.kmpssot
+package io.github.yuroyami.kmpssot
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
@@ -14,7 +14,9 @@ import org.gradle.work.DisableCachingByDefault
  *
  * pbxproj keys (gated per `propagate*` toggle + value presence):
  *  - propagateVersion     → MARKETING_VERSION, CURRENT_PROJECT_VERSION
- *  - propagateAppName     → INFOPLIST_KEY_CFBundleDisplayName, INFOPLIST_KEY_CFBundleName
+ *  - propagateAppName     → INFOPLIST_KEY_CFBundleDisplayName, INFOPLIST_KEY_CFBundleName,
+ *                           PRODUCT_NAME (so custom Info.plist files that reference
+ *                           $(PRODUCT_NAME) also pick up the app name)
  *  - propagateBundleId    → PRODUCT_BUNDLE_IDENTIFIER (every occurrence)
  *  - propagateLocaleList  → knownRegions
  *
@@ -82,13 +84,22 @@ abstract class SyncIosConfigTask : DefaultTask() {
 
         if (propagateAppName.get() && appName.isPresent) {
             val n = appName.get()
+            // Quoted form keeps pbxproj valid for names that contain spaces or symbols.
+            val quoted = "\"${n.replace("\"", "\\\"")}\""
             updated = updated.replace(
                 Regex("""INFOPLIST_KEY_CFBundleDisplayName = [^;]+;"""),
-                "INFOPLIST_KEY_CFBundleDisplayName = $n;"
+                "INFOPLIST_KEY_CFBundleDisplayName = $quoted;"
             )
             updated = updated.replace(
                 Regex("""INFOPLIST_KEY_CFBundleName = [^;]+;"""),
-                "INFOPLIST_KEY_CFBundleName = $n;"
+                "INFOPLIST_KEY_CFBundleName = $quoted;"
+            )
+            // INFOPLIST_KEY_* is only honored with generated Info.plist; PRODUCT_NAME is
+            // the universal knob — a custom Info.plist referencing $(PRODUCT_NAME) also
+            // resolves correctly once this is set.
+            updated = updated.replace(
+                Regex("""PRODUCT_NAME = [^;]+;"""),
+                "PRODUCT_NAME = $quoted;"
             )
         }
 

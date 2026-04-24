@@ -1,4 +1,4 @@
-package com.yuroyami.kmpssot
+package io.github.yuroyami.kmpssot
 
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.dsl.LibraryExtension
@@ -15,7 +15,7 @@ class KmpSsotPlugin : Plugin<Project> {
 
     override fun apply(target: Project) {
         check(target == target.rootProject) {
-            "com.yuroyami.kmpssot must be applied to the root project. " +
+            "io.github.yuroyami.kmpssot must be applied to the root project. " +
                     "Apply it in the root build.gradle.kts, not in a submodule."
         }
 
@@ -23,6 +23,7 @@ class KmpSsotPlugin : Plugin<Project> {
             javaVersion.convention(21)
             iosProjectPath.convention("iosApp/iosApp.xcodeproj/project.pbxproj")
             iosPodfilePath.convention("iosApp/Podfile")
+            iosInfoPlistPath.convention("iosApp/iosApp/Info.plist")
             androidAppModule.convention("androidApp")
             appLogoBackgroundColor.convention("#FFFFFF")
             propagateAppName.convention(true)
@@ -32,6 +33,7 @@ class KmpSsotPlugin : Plugin<Project> {
             propagateLogo.convention(true)
             propagateSharedModule.convention(true)
             syncIos.convention(true)
+            sanitizeIosProject.convention(true)
 
             // Auto-detect locales from {sharedModule}/src/commonMain/composeResources/values-*.
             locales.convention(target.provider { autoDetectLocales(target, this) })
@@ -55,9 +57,13 @@ class KmpSsotPlugin : Plugin<Project> {
             }
         }
 
+        val sanitizeIosTask = registerSanitizeIosTask(target, ext)
         val syncIosTask = registerSyncIosTask(target, ext)
         val syncIosLogoTask = registerSyncIosLogoTask(target, ext)
         val syncAndroidLogoTask = registerSyncAndroidLogoTask(target, ext)
+
+        // syncIosConfig relies on the Info.plist having SSOT-pointing keys, so sanitize first.
+        syncIosTask.configure { dependsOn(sanitizeIosTask) }
 
         target.subprojects {
             val sub = this
@@ -88,6 +94,17 @@ class KmpSsotPlugin : Plugin<Project> {
     }
 
     // --- Task registration --------------------------------------------------
+
+    private fun registerSanitizeIosTask(
+        root: Project,
+        ext: KmpSsotExtension,
+    ): TaskProvider<SanitizeIosProjectTask> =
+        root.tasks.register<SanitizeIosProjectTask>("sanitizeIosProject") {
+            onlyIf { ext.syncIos.get() && ext.sanitizeIosProject.get() }
+            infoPlistFile.set(root.layout.projectDirectory.file(ext.iosInfoPlistPath))
+            propagateAppName.set(ext.propagateAppName)
+            propagateVersion.set(ext.propagateVersion)
+        }
 
     private fun registerSyncIosTask(
         root: Project,

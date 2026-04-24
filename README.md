@@ -41,7 +41,7 @@ the plugin without environment variables.
 ```kotlin
 // <root>/build.gradle.kts
 plugins {
-    id("com.yuroyami.kmpssot") version "0.6.0"
+    id("io.github.yuroyami.kmpssot") version "1.0.4"
     // ...your other plugins, typically with .apply(false)...
 }
 
@@ -170,7 +170,7 @@ When you rename it (say from `shared` to `composeApp`):
 3. Reference it in your shared module's cocoapods `baseName`:
    ```kotlin
    // shared (or composeApp)/build.gradle.kts
-   val ssot = rootProject.extensions.getByType<com.yuroyami.kmpssot.KmpSsotExtension>()
+   val ssot = rootProject.extensions.getByType<io.github.yuroyami.kmpssot.KmpSsotExtension>()
    kotlin {
        cocoapods {
            framework { baseName = ssot.sharedModule.get() }
