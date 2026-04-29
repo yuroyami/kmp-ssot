@@ -41,7 +41,7 @@ the plugin without environment variables.
 ```kotlin
 // <root>/build.gradle.kts
 plugins {
-    id("io.github.yuroyami.kmpssot") version "1.1.0"
+    id("io.github.yuroyami.kmpssot") version "1.2.0"
     // ...your other plugins, typically with .apply(false)...
 }
 
@@ -66,8 +66,8 @@ kmpSsot {
     // locales = listOf("en", "ar", "fr")
 
     // App logo — both layers required if logo propagation is desired, or both null.
-    // Both PNGs are treated as the full Android adaptive-icon canvas (108dp).
-    // Foreground content must live in the inner ~61% safe zone (66dp of 108dp).
+    // Design naturally (fill the canvas, iOS-marketing-icon style); the plugin
+    // handles Android's adaptive-icon safe zone automatically.
     // appLogoPngForeground = file("art/logo_foreground.png")  // PNG with alpha
     // appLogoPngBackground = file("art/logo_background.png")  // opaque PNG (or solid colour)
 
@@ -137,24 +137,27 @@ kotlin.android {
 
 ## App logo
 
-The logo is sourced from **two square PNG layers** that map directly onto
-Android's adaptive-icon model:
+The logo is sourced from **two square PNG layers**:
 
 - `appLogoPngForeground` — PNG with an alpha channel. The visible logo content.
 - `appLogoPngBackground` — PNG (effectively opaque). The colour/texture behind the foreground.
 
-Both PNGs are treated as the full **108dp adaptive-icon canvas**. Foreground
-content must live inside the **inner safe zone** — the centred 66/108 region
-(~61.1% of the canvas). Anything outside the safe zone may be cropped on
-Android by the launcher's mask. Recommended source size: 1024×1024;
-minimum useful size: 432×432 (xxxhdpi adaptive-icon foreground).
+**Design naturally** — fill the canvas like an iOS App Store icon. The plugin
+handles Android's adaptive-icon safe zone for you: when generating the
+adaptive FG layer, the source FG is centred at 66/108 (~61.1%) of the
+108dp canvas with a transparent margin, so the launcher's mask and parallax
+movement never crop your content. iOS and the Android legacy fallback
+render the source layers at native size, so what you design is what ships.
+
+Recommended source size: 1024×1024 (matches the iOS App Store icon).
+Minimum useful size: 432×432 (xxxhdpi adaptive-icon foreground).
 
 **Android (`syncAndroidLogo`)** — generates a complete launcher-icon resource
 tree under `${androidAppModule}/src/main/res/`:
 
-- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_foreground.png` — adaptive icon foreground at each density (108×scale)
-- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_background.png` — adaptive icon background at each density
-- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher.png` — legacy fallback (square, safe-zone composite, 48×scale)
+- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_foreground.png` — FG, auto-padded to the 66/108 safe zone (108×scale canvas)
+- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_background.png` — BG, fills the full 108×scale canvas
+- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher.png` — legacy fallback (square, native composite, 48×scale)
 - `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_round.png` — legacy fallback (circle-masked composite)
 - `mipmap-anydpi-v26/ic_launcher.xml` + `ic_launcher_round.xml` — API-26+ adaptive-icon wrappers
 
@@ -164,17 +167,15 @@ The plugin's scope is pure Android + iOS platform propagation — it does **not*
 copy anything into `commonMain/composeResources/`. If you want the logo
 available to Compose, place it in `composeResources/drawable/` yourself.
 
-**iOS (`syncIosLogo`)** — composites foreground over background, flattens to
-opaque 1024×1024 RGB (App Store marketing icons must not have alpha), writes:
+**iOS (`syncIosLogo`)** — composites foreground over background at native
+1024×1024, flattens to opaque RGB (App Store marketing icons must not have
+alpha), writes:
 - `iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
 - A single-image universal `Contents.json`
 
-Because the source layers are sized for the Android safe zone, the iOS
-icon will show some natural padding around the foreground — that matches
-how most modern App Store icons look anyway. Requires iOS deployment
-target 14+ (single-size universal icon, Xcode handles down-scaling).
-
-Hooked into the iOS framework link tasks so the icon ships with every iOS build.
+Requires iOS deployment target 14+ (single-size universal icon, Xcode handles
+down-scaling at build time). Hooked into the iOS framework link tasks so the
+icon ships with every iOS build.
 
 If you set only one of the two logo layers, the build fails at
 `afterEvaluate` — pair them, or leave both unset.
@@ -264,7 +265,7 @@ The list propagates to:
 | iOS `Podfile` (when `sharedModule` differs from current pod name) | `pod 'X', :path => '../X'` lines |
 | iOS `iosApp/**/*.swift` (when `sharedModule` differs) | plain `import X` statements |
 | iOS `AppIcon.appiconset/` | `AppIcon-1024.png` (FG-over-BG composite, opaque) + `Contents.json` (universal) |
-| Android `${androidAppModule}/src/main/res/` | per-density `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher{,_round,_foreground,_background}.png` + `mipmap-anydpi-v26/ic_launcher{,_round}.xml` adaptive wrappers |
+| Android `${androidAppModule}/src/main/res/` | per-density `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher{,_round}.png` (legacy composite) + `ic_launcher_foreground.png` (auto-padded to 66/108 safe zone) + `ic_launcher_background.png` (full canvas) + `mipmap-anydpi-v26/ic_launcher{,_round}.xml` adaptive wrappers |
 
 `versionCode` is derived from `versionName` via the formula
 `"1" + dot-segments-padded-to-3` (e.g. `0.3.0` → `1000003000`).

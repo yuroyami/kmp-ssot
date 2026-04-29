@@ -54,19 +54,22 @@ abstract class KmpSsotExtension {
 
     /**
      * Foreground layer of the app logo, as a square PNG with an alpha channel.
-     * Treated as the full Android adaptive-icon canvas (108dp). Design content
-     * inside the inner safe zone (~66dp of 108dp ≈ 61.1% centred) — anything
-     * outside may be cropped on Android by launcher masks.
+     * Designed naturally — fill the canvas like an iOS marketing icon. The
+     * plugin handles Android's adaptive-icon safe zone automatically by
+     * centring the FG at 66/108 (~61.1%) of the adaptive canvas; for iOS and
+     * Android legacy fallbacks, the FG is rendered at its native size.
      *
-     * Recommended source size: 1024×1024. Minimum useful size: 432×432
-     * (xxxhdpi adaptive-icon foreground).
+     * Recommended source size: 1024×1024 (matches the iOS App Store icon).
+     * Minimum useful size: 432×432 (xxxhdpi adaptive-icon foreground).
      *
      * Propagated to:
      *  - Android: density-bucketed `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_foreground.png`
-     *    plus an adaptive-icon wrapper in `mipmap-anydpi-v26/`, plus composited
-     *    legacy `ic_launcher{,_round}.png` for pre-API-26 devices.
-     *  - iOS: composited over [appLogoPngBackground], flattened to an opaque
-     *    1024×1024 RGB PNG (App Store marketing icons must not have alpha).
+     *    (auto-padded to safe zone), plus an adaptive-icon wrapper in
+     *    `mipmap-anydpi-v26/`, plus composited legacy
+     *    `ic_launcher{,_round}.png` for pre-API-26 devices.
+     *  - iOS: composited over [appLogoPngBackground] at full size, flattened
+     *    to an opaque 1024×1024 RGB PNG (App Store marketing icons must not
+     *    have alpha).
      */
     abstract val appLogoPngForeground: RegularFileProperty
 
@@ -75,8 +78,9 @@ abstract class KmpSsotExtension {
      * the BG should be effectively opaque — any transparency will read as
      * white on the iOS flattened output. A flat-colour PNG works fine.
      *
-     * Treated as the full Android adaptive-icon canvas (108dp), same as
-     * [appLogoPngForeground]. Recommended source size: 1024×1024.
+     * On Android adaptive icons the BG fills the full 108dp canvas (with
+     * bleed beyond the visible mask used by launcher parallax). Recommended
+     * source size: 1024×1024.
      */
     abstract val appLogoPngBackground: RegularFileProperty
 

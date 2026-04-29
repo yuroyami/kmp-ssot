@@ -17,13 +17,21 @@ import javax.imageio.ImageIO
 
 /**
  * Propagates the FG/BG layer PNGs to a complete Android launcher-icon resource
- * tree. Both source PNGs are treated as the full 108dp adaptive-icon canvas;
- * the foreground is expected to live inside the inner ~66dp safe zone.
+ * tree. Source PNGs are treated as **the icon as designed** (square, fills the
+ * canvas like an iOS marketing icon) — no manual safe-zone padding required.
+ * The plugin applies Android's adaptive-icon safe-zone scaling automatically:
+ *
+ *  - Adaptive FG layer: source FG centred at 66/108 (~61.1%) of the canvas,
+ *    leaving a transparent margin for the launcher's parallax movement.
+ *  - Adaptive BG layer: source BG fills the 108dp canvas (parallax bleed).
+ *  - Legacy fallback: source FG and BG composited at native size, then
+ *    resized to the legacy launcher size — no safe-zone cropping, since the
+ *    source already represents "the icon as it should look".
  *
  * Outputs (per density bucket m/h/xh/xxh/xxxh):
- *  - `mipmap-{density}/ic_launcher_foreground.png` — adaptive icon foreground
- *  - `mipmap-{density}/ic_launcher_background.png` — adaptive icon background
- *  - `mipmap-{density}/ic_launcher.png` — legacy fallback (square mask)
+ *  - `mipmap-{density}/ic_launcher_foreground.png` — safe-zone-padded FG
+ *  - `mipmap-{density}/ic_launcher_background.png` — full-canvas BG
+ *  - `mipmap-{density}/ic_launcher.png` — legacy fallback (square)
  *  - `mipmap-{density}/ic_launcher_round.png` — legacy fallback (circle mask)
  *
  * Plus the API-26+ adaptive-icon wrapper:
@@ -90,14 +98,18 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
             val adaptiveSize = (108 * scale).toInt()
             val legacySize = (48 * scale).toInt()
 
-            // Adaptive-icon FG/BG layers — full 108dp canvas, scaled per density.
-            writePngIfChanged(mipmap.resolve("ic_launcher_foreground.png"), resize(fg, adaptiveSize, adaptiveSize))
+            // Adaptive FG: the source FG sits inside the 66/108 safe zone with
+            // a transparent margin for parallax. Without this, an "iOS-style"
+            // FG that fills the canvas would have its edges cropped by the
+            // launcher's mask.
+            writePngIfChanged(mipmap.resolve("ic_launcher_foreground.png"), padToSafeZone(fg, adaptiveSize))
+            // Adaptive BG: fills the full 108dp canvas, including the bleed
+            // region beyond the visible mask (used for parallax).
             writePngIfChanged(mipmap.resolve("ic_launcher_background.png"), resize(bg, adaptiveSize, adaptiveSize))
 
-            // Legacy fallback — composite FG over BG, crop to the safe zone (the
-            // visible region on adaptive-icon devices), resize to legacy size.
-            // Square variant is the safe-zone composite directly; round masks it
-            // with a circular clip.
+            // Legacy fallback: source FG over source BG at native size, then
+            // resized to the legacy launcher size. The user's source already
+            // represents "the icon" — no safe-zone cropping needed.
             val legacySquare = legacyComposite(fg, bg, legacySize)
             writePngIfChanged(mipmap.resolve("ic_launcher.png"), legacySquare)
             writePngIfChanged(mipmap.resolve("ic_launcher_round.png"), applyCircleMask(legacySquare))
@@ -122,9 +134,24 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
         |""".trimMargin()
 
     /**
-     * Composite FG over BG at full canvas, crop to the inner safe zone (the
-     * region that actually shows on adaptive-icon launchers), then resize to
-     * the requested legacy size.
+     * Centre [fg] at the 66/108 safe-zone scale on a transparent canvas of the
+     * requested size. Used for the adaptive-icon foreground layer so the
+     * launcher's mask (and parallax movement) doesn't crop the FG content.
+     */
+    private fun padToSafeZone(fg: BufferedImage, canvasSize: Int): BufferedImage {
+        val out = BufferedImage(canvasSize, canvasSize, BufferedImage.TYPE_INT_ARGB)
+        val safeSize = (canvasSize * SAFE_ZONE_RATIO).toInt()
+        val offset = (canvasSize - safeSize) / 2
+        out.createGraphics().withQuality {
+            drawImage(fg, offset, offset, safeSize, safeSize, null)
+        }
+        return out
+    }
+
+    /**
+     * Composite FG over BG at native source size and resize to the legacy
+     * launcher size. The source represents "the icon as designed", so no
+     * safe-zone cropping is applied here.
      */
     private fun legacyComposite(fg: BufferedImage, bg: BufferedImage, size: Int): BufferedImage {
         val canvas = maxOf(fg.width, bg.width).coerceAtLeast(size)
@@ -133,13 +160,7 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
             drawImage(bg, 0, 0, canvas, canvas, null)
             drawImage(fg, 0, 0, canvas, canvas, null)
         }
-
-        // Safe zone is the inner 66/108 of the canvas, centred.
-        val safe = (canvas * SAFE_ZONE_RATIO).toInt()
-        val offset = (canvas - safe) / 2
-        val cropped = full.getSubimage(offset, offset, safe, safe)
-
-        return resize(cropped, size, size)
+        return resize(full, size, size)
     }
 
     private fun applyCircleMask(src: BufferedImage): BufferedImage {
