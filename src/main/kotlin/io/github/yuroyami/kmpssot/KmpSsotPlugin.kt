@@ -25,7 +25,6 @@ class KmpSsotPlugin : Plugin<Project> {
             iosPodfilePath.convention("iosApp/Podfile")
             iosInfoPlistPath.convention("iosApp/iosApp/Info.plist")
             androidAppModule.convention("androidApp")
-            appLogoBackgroundColor.convention("#FFFFFF")
             propagateAppName.convention(true)
             propagateBundleId.convention(true)
             propagateVersion.convention(true)
@@ -34,10 +33,20 @@ class KmpSsotPlugin : Plugin<Project> {
             propagateSharedModule.convention(true)
             syncIos.convention(true)
             sanitizeIosProject.convention(true)
+            cleanupLegacyLogoArtifacts.convention(false)
 
             // Auto-detect locales from {sharedModule}/src/commonMain/composeResources/values-*.
             locales.convention(target.provider { autoDetectLocales(target, this) })
         }
+
+        val sanitizeIosTask = registerSanitizeIosTask(target, ext)
+        val syncIosTask = registerSyncIosTask(target, ext)
+        val syncIosLogoTask = registerSyncIosLogoTask(target, ext)
+        val syncAndroidLogoTask = registerSyncAndroidLogoTask(target, ext)
+        val cleanupLegacyLogoTask = registerCleanupLegacyLogoTask(target, ext)
+
+        // syncIosConfig relies on the Info.plist having SSOT-pointing keys, so sanitize first.
+        syncIosTask.configure { dependsOn(sanitizeIosTask) }
 
         target.afterEvaluate {
             if (!ext.sharedModule.isPresent) {
@@ -47,23 +56,21 @@ class KmpSsotPlugin : Plugin<Project> {
                 )
             }
             // Logo: enforce paired-or-neither.
-            val xmlSet = ext.appLogoXml.isPresent
-            val pngSet = ext.appLogoPng.isPresent
-            if (xmlSet xor pngSet) {
+            val fgSet = ext.appLogoPngForeground.isPresent
+            val bgSet = ext.appLogoPngBackground.isPresent
+            if (fgSet xor bgSet) {
                 throw GradleException(
-                    "kmpSsot { appLogoXml + appLogoPng } must be set together. " +
-                            "Either provide both (Android XML + iOS PNG) or neither."
+                    "kmpSsot { appLogoPngForeground + appLogoPngBackground } must be set together. " +
+                            "Either provide both layers or neither."
                 )
             }
+
+            // Auto-cleanup of legacy logo artefacts is opt-in. When enabled, run
+            // it before the regular Android sync so the new tree lands clean.
+            if (ext.cleanupLegacyLogoArtifacts.get()) {
+                syncAndroidLogoTask.configure { dependsOn(cleanupLegacyLogoTask) }
+            }
         }
-
-        val sanitizeIosTask = registerSanitizeIosTask(target, ext)
-        val syncIosTask = registerSyncIosTask(target, ext)
-        val syncIosLogoTask = registerSyncIosLogoTask(target, ext)
-        val syncAndroidLogoTask = registerSyncAndroidLogoTask(target, ext)
-
-        // syncIosConfig relies on the Info.plist having SSOT-pointing keys, so sanitize first.
-        syncIosTask.configure { dependsOn(sanitizeIosTask) }
 
         target.subprojects {
             val sub = this
@@ -133,8 +140,12 @@ class KmpSsotPlugin : Plugin<Project> {
         ext: KmpSsotExtension,
     ): TaskProvider<SyncIosLogoTask> =
         root.tasks.register<SyncIosLogoTask>("syncIosLogo") {
-            onlyIf { ext.syncIos.get() && ext.propagateLogo.get() && ext.appLogoPng.isPresent }
-            sourcePng.set(ext.appLogoPng)
+            onlyIf {
+                ext.syncIos.get() && ext.propagateLogo.get() &&
+                        ext.appLogoPngForeground.isPresent && ext.appLogoPngBackground.isPresent
+            }
+            foregroundPng.set(ext.appLogoPngForeground)
+            backgroundPng.set(ext.appLogoPngBackground)
             appiconsetDir.set(root.layout.projectDirectory.dir("iosApp/iosApp/Assets.xcassets/AppIcon.appiconset"))
         }
 
@@ -143,13 +154,26 @@ class KmpSsotPlugin : Plugin<Project> {
         ext: KmpSsotExtension,
     ): TaskProvider<SyncAndroidLogoTask> =
         root.tasks.register<SyncAndroidLogoTask>("syncAndroidLogo") {
-            onlyIf { ext.propagateLogo.get() && ext.appLogoXml.isPresent }
-            sourceXml.set(ext.appLogoXml)
+            onlyIf {
+                ext.propagateLogo.get() &&
+                        ext.appLogoPngForeground.isPresent && ext.appLogoPngBackground.isPresent
+            }
+            foregroundPng.set(ext.appLogoPngForeground)
+            backgroundPng.set(ext.appLogoPngBackground)
             // Resolve lazily — androidAppModule may not be set yet at register time.
             androidResDir.set(root.layout.projectDirectory.dir(
                 ext.androidAppModule.map { "$it/src/main/res" }
             ))
-            backgroundColor.set(ext.appLogoBackgroundColor)
+        }
+
+    private fun registerCleanupLegacyLogoTask(
+        root: Project,
+        ext: KmpSsotExtension,
+    ): TaskProvider<CleanupLegacyAppLogoArtifactsTask> =
+        root.tasks.register<CleanupLegacyAppLogoArtifactsTask>("cleanupLegacyAppLogoArtifacts") {
+            androidResDir.set(root.layout.projectDirectory.dir(
+                ext.androidAppModule.map { "$it/src/main/res" }
+            ))
         }
 
     // --- Hooking new tasks --------------------------------------------------

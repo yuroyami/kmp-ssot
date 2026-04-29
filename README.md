@@ -41,7 +41,7 @@ the plugin without environment variables.
 ```kotlin
 // <root>/build.gradle.kts
 plugins {
-    id("io.github.yuroyami.kmpssot") version "1.0.4"
+    id("io.github.yuroyami.kmpssot") version "1.1.0"
     // ...your other plugins, typically with .apply(false)...
 }
 
@@ -65,10 +65,11 @@ kmpSsot {
     // Explicit list overrides.
     // locales = listOf("en", "ar", "fr")
 
-    // App logo — both required if logo propagation is desired, or both null.
-    // appLogoXml = file("art/ic_launcher.xml")    // vector drawable for Android + Compose
-    // appLogoPng = file("art/ic_launcher.png")    // for iOS AppIcon (resized to 1024 if needed)
-    // appLogoBackgroundColor = "#FFFFFF"          // adaptive icon background
+    // App logo — both layers required if logo propagation is desired, or both null.
+    // Both PNGs are treated as the full Android adaptive-icon canvas (108dp).
+    // Foreground content must live in the inner ~61% safe zone (66dp of 108dp).
+    // appLogoPngForeground = file("art/logo_foreground.png")  // PNG with alpha
+    // appLogoPngBackground = file("art/logo_background.png")  // opaque PNG (or solid colour)
 
     // Toggles — all default true. Flip a single flag to opt out.
     // propagateAppName       = true
@@ -78,6 +79,12 @@ kmpSsot {
     // propagateLogo          = true
     // propagateSharedModule  = true
     // syncIos                = true
+
+    // One-shot migration toggle (default false). When true, syncAndroidLogo
+    // first deletes drawable/ic_launcher.xml + values/ic_launcher_background.xml
+    // (artefacts from pre-FG/BG plugin versions). The task is also always
+    // registered for manual runs: ./gradlew cleanupLegacyAppLogoArtifacts
+    // cleanupLegacyLogoArtifacts = true
 }
 ```
 
@@ -130,33 +137,67 @@ kotlin.android {
 
 ## App logo
 
-When both `appLogoXml` and `appLogoPng` are set, the plugin owns the launcher
-icon end-to-end:
+The logo is sourced from **two square PNG layers** that map directly onto
+Android's adaptive-icon model:
 
-**Android (`syncAndroidLogo`)** — propagates the source XML vector drawable to:
-- `${androidAppModule}/src/main/res/drawable/ic_launcher.xml` — direct copy
-- `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml` — adaptive icon wrappers
-- `${androidAppModule}/src/main/res/values/ic_launcher_background.xml` — color resource (controlled by `appLogoBackgroundColor`)
+- `appLogoPngForeground` — PNG with an alpha channel. The visible logo content.
+- `appLogoPngBackground` — PNG (effectively opaque). The colour/texture behind the foreground.
 
-The plugin's scope is pure Android + iOS platform propagation — it does **not**
-copy the vector into `commonMain/composeResources/`. If you want the same
-drawable available to Compose via `vectorResource(...)`, place it in
-`composeResources/drawable/` yourself; that's user-owned territory.
+Both PNGs are treated as the full **108dp adaptive-icon canvas**. Foreground
+content must live inside the **inner safe zone** — the centred 66/108 region
+(~61.1% of the canvas). Anything outside the safe zone may be cropped on
+Android by the launcher's mask. Recommended source size: 1024×1024;
+minimum useful size: 432×432 (xxxhdpi adaptive-icon foreground).
+
+**Android (`syncAndroidLogo`)** — generates a complete launcher-icon resource
+tree under `${androidAppModule}/src/main/res/`:
+
+- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_foreground.png` — adaptive icon foreground at each density (108×scale)
+- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_background.png` — adaptive icon background at each density
+- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher.png` — legacy fallback (square, safe-zone composite, 48×scale)
+- `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_round.png` — legacy fallback (circle-masked composite)
+- `mipmap-anydpi-v26/ic_launcher.xml` + `ic_launcher_round.xml` — API-26+ adaptive-icon wrappers
 
 Hooked into Android `preBuild` so files are in place by resource processing.
 
-**iOS (`syncIosLogo`)** — takes the source PNG, resizes to 1024×1024
-(bicubic, antialiased) if needed, writes:
+The plugin's scope is pure Android + iOS platform propagation — it does **not**
+copy anything into `commonMain/composeResources/`. If you want the logo
+available to Compose, place it in `composeResources/drawable/` yourself.
+
+**iOS (`syncIosLogo`)** — composites foreground over background, flattens to
+opaque 1024×1024 RGB (App Store marketing icons must not have alpha), writes:
 - `iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
 - A single-image universal `Contents.json`
 
-Requires iOS deployment target 14+ (single-size universal icon, Xcode handles
-the down-scaling at build time).
+Because the source layers are sized for the Android safe zone, the iOS
+icon will show some natural padding around the foreground — that matches
+how most modern App Store icons look anyway. Requires iOS deployment
+target 14+ (single-size universal icon, Xcode handles down-scaling).
 
 Hooked into the iOS framework link tasks so the icon ships with every iOS build.
 
-If you set only one of the two logo properties, the build fails at
+If you set only one of the two logo layers, the build fails at
 `afterEvaluate` — pair them, or leave both unset.
+
+### Migrating from a pre-FG/BG plugin version
+
+Older versions of the plugin generated two files under the Android res tree
+that the new pipeline no longer produces:
+
+- `${androidAppModule}/src/main/res/drawable/ic_launcher.xml`
+- `${androidAppModule}/src/main/res/values/ic_launcher_background.xml`
+
+After upgrading they sit there as orphan resources. Two ways to clean them up:
+
+1. **One-shot manual run**:
+   ```bash
+   ./gradlew cleanupLegacyAppLogoArtifacts
+   ```
+2. **Set `cleanupLegacyLogoArtifacts = true`** in the DSL — `syncAndroidLogo`
+   then deletes them on every run. The toggle defaults to `false` because
+   it's only meaningful during the one-time migration.
+
+Both files were 100% plugin-owned in older versions, so deletion is safe.
 
 ---
 
@@ -222,8 +263,8 @@ The list propagates to:
 | iOS `project.pbxproj` (rewritten idempotently) | `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`, `INFOPLIST_KEY_CFBundleDisplayName`, `INFOPLIST_KEY_CFBundleName`, `PRODUCT_BUNDLE_IDENTIFIER`, `knownRegions` |
 | iOS `Podfile` (when `sharedModule` differs from current pod name) | `pod 'X', :path => '../X'` lines |
 | iOS `iosApp/**/*.swift` (when `sharedModule` differs) | plain `import X` statements |
-| iOS `AppIcon.appiconset/` | `AppIcon-1024.png` (resized) + `Contents.json` (universal) |
-| Android `${androidAppModule}/src/main/res/` | `drawable/ic_launcher.xml`, `mipmap-anydpi-v26/ic_launcher{,_round}.xml`, `values/ic_launcher_background.xml` |
+| iOS `AppIcon.appiconset/` | `AppIcon-1024.png` (FG-over-BG composite, opaque) + `Contents.json` (universal) |
+| Android `${androidAppModule}/src/main/res/` | per-density `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher{,_round,_foreground,_background}.png` + `mipmap-anydpi-v26/ic_launcher{,_round}.xml` adaptive wrappers |
 
 `versionCode` is derived from `versionName` via the formula
 `"1" + dot-segments-padded-to-3` (e.g. `0.3.0` → `1000003000`).

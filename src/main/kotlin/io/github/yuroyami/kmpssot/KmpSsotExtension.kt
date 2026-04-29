@@ -12,8 +12,9 @@ import org.gradle.api.provider.Provider
  * `propagate*` toggle is true (default true) AND (b) the value is set.
  * Leave a field unset to opt out of that piece of propagation completely.
  *
- * App logo: set both [appLogoXml] and [appLogoPng] to enable logo propagation,
- * or leave both unset. Setting only one fails configuration.
+ * App logo: set both [appLogoPngForeground] and [appLogoPngBackground] to
+ * enable logo propagation, or leave both unset. Setting only one fails
+ * configuration.
  */
 abstract class KmpSsotExtension {
 
@@ -52,32 +53,32 @@ abstract class KmpSsotExtension {
     // --- App logo -------------------------------------------------------------
 
     /**
-     * Source XML vector drawable for the app logo. Propagated to Android only:
-     *  - `${androidAppModule}/src/main/res/drawable/ic_launcher.xml`
-     *  - `${androidAppModule}/src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml`
-     *    (adaptive icon wrappers referencing the drawable + background color)
-     *  - `${androidAppModule}/src/main/res/values/ic_launcher_background.xml`
-     *    (color resource for the adaptive icon background)
+     * Foreground layer of the app logo, as a square PNG with an alpha channel.
+     * Treated as the full Android adaptive-icon canvas (108dp). Design content
+     * inside the inner safe zone (~66dp of 108dp ≈ 61.1% centred) — anything
+     * outside may be cropped on Android by launcher masks.
      *
-     * If you want the same vector available to Compose via `vectorResource(...)`,
-     * place a copy in your `composeResources/drawable/` yourself — the plugin
-     * deliberately does not propagate into Compose resources.
+     * Recommended source size: 1024×1024. Minimum useful size: 432×432
+     * (xxxhdpi adaptive-icon foreground).
+     *
+     * Propagated to:
+     *  - Android: density-bucketed `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_foreground.png`
+     *    plus an adaptive-icon wrapper in `mipmap-anydpi-v26/`, plus composited
+     *    legacy `ic_launcher{,_round}.png` for pre-API-26 devices.
+     *  - iOS: composited over [appLogoPngBackground], flattened to an opaque
+     *    1024×1024 RGB PNG (App Store marketing icons must not have alpha).
      */
-    abstract val appLogoXml: RegularFileProperty
+    abstract val appLogoPngForeground: RegularFileProperty
 
     /**
-     * Source PNG (ideally 1024x1024) for the iOS app icon. Propagated to
-     * `iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`
-     * with a single-image universal `Contents.json`. Source is automatically
-     * resized to 1024x1024 if it isn't already.
+     * Background layer of the app logo, as a square PNG. Alpha is allowed but
+     * the BG should be effectively opaque — any transparency will read as
+     * white on the iOS flattened output. A flat-colour PNG works fine.
+     *
+     * Treated as the full Android adaptive-icon canvas (108dp), same as
+     * [appLogoPngForeground]. Recommended source size: 1024×1024.
      */
-    abstract val appLogoPng: RegularFileProperty
-
-    /**
-     * Background color for the Android adaptive icon wrapper. Hex string.
-     * Defaults to `"#FFFFFF"`.
-     */
-    abstract val appLogoBackgroundColor: Property<String>
+    abstract val appLogoPngBackground: RegularFileProperty
 
     // --- File paths -----------------------------------------------------------
 
@@ -110,6 +111,18 @@ abstract class KmpSsotExtension {
      * in a way that will defeat SSOT propagation. Default true.
      */
     abstract val sanitizeIosProject: Property<Boolean>
+
+    /**
+     * Delete logo artefacts left behind by pre-FG/BG plugin versions:
+     *  - `${androidAppModule}/src/main/res/drawable/ic_launcher.xml`
+     *  - `${androidAppModule}/src/main/res/values/ic_launcher_background.xml`
+     *
+     * Default false — opt-in migration helper. When true, the
+     * `cleanupLegacyAppLogoArtifacts` task runs as a dependency of
+     * `syncAndroidLogo`. The task is also always registered for one-shot
+     * manual invocation (`./gradlew cleanupLegacyAppLogoArtifacts`).
+     */
+    abstract val cleanupLegacyLogoArtifacts: Property<Boolean>
 
     // --- Derived values (read-only) ------------------------------------------
 

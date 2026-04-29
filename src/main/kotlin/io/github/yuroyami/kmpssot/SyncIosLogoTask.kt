@@ -6,70 +6,78 @@ import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
+import java.awt.AlphaComposite
+import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 
 /**
- * Propagates [sourcePng] (ideally 1024x1024) to the iOS AppIcon.appiconset:
- *  - Writes `AppIcon-1024.png` (resized from source if needed)
- *  - Writes a single-image universal `Contents.json`
+ * Composites the FG/BG layer PNGs into the iOS AppIcon.appiconset:
+ *  - Draws BG, then FG on top (FG alpha bleeds through to BG).
+ *  - Flattens to an opaque RGB 1024×1024 — App Store marketing icons MUST NOT
+ *    have an alpha channel, so any FG transparency is baked against BG.
+ *  - Writes `AppIcon-1024.png` and a single-image universal `Contents.json`.
  *
  * Single-size universal AppIcon requires iOS deployment target 14+, which is
  * the modern default. Xcode handles down-scaling at build time.
  *
- * Idempotent — PNG and Contents.json are rewritten only when content differs.
+ * Idempotent — outputs are rewritten only when bytes/text differ.
  */
 @DisableCachingByDefault(because = "Image processing is cheap relative to total iOS build time.")
 abstract class SyncIosLogoTask : DefaultTask() {
 
     init {
         group = "kmp-ssot"
-        description = "Propagate the app logo PNG to the iOS AppIcon.appiconset (single 1024 universal)."
+        description = "Composite FG+BG app-logo PNGs into the iOS AppIcon.appiconset (single 1024 universal)."
         outputs.upToDateWhen { false }
     }
 
-    @get:Internal abstract val sourcePng: RegularFileProperty
+    @get:Internal abstract val foregroundPng: RegularFileProperty
+    @get:Internal abstract val backgroundPng: RegularFileProperty
     @get:Internal abstract val appiconsetDir: DirectoryProperty
 
     @TaskAction
     fun sync() {
-        val src = sourcePng.asFile.get()
-        if (!src.exists()) {
-            logger.warn("[kmpSsot] appLogoPng not found at ${src.path} — skipping iOS logo.")
+        val fgFile = foregroundPng.asFile.get()
+        val bgFile = backgroundPng.asFile.get()
+        if (!fgFile.exists()) {
+            logger.warn("[kmpSsot] appLogoPngForeground not found at ${fgFile.path} — skipping iOS logo.")
+            return
+        }
+        if (!bgFile.exists()) {
+            logger.warn("[kmpSsot] appLogoPngBackground not found at ${bgFile.path} — skipping iOS logo.")
             return
         }
 
-        val source = ImageIO.read(src) ?: run {
-            logger.warn("[kmpSsot] Could not decode ${src.path} as an image — skipping iOS logo.")
+        val fg = ImageIO.read(fgFile) ?: run {
+            logger.warn("[kmpSsot] Could not decode ${fgFile.path} as an image — skipping iOS logo.")
             return
+        }
+        val bg = ImageIO.read(bgFile) ?: run {
+            logger.warn("[kmpSsot] Could not decode ${bgFile.path} as an image — skipping iOS logo.")
+            return
+        }
+
+        // Composite at 1024×1024 directly. Output type INT_RGB so any residual
+        // alpha is composed against opaque white (App Store rejects alpha icons).
+        val composite = BufferedImage(IOS_SIZE, IOS_SIZE, BufferedImage.TYPE_INT_RGB)
+        composite.createGraphics().withQuality {
+            // Fill white as the safety floor in case BG itself isn't fully opaque.
+            color = java.awt.Color.WHITE
+            fillRect(0, 0, IOS_SIZE, IOS_SIZE)
+            drawImage(bg, 0, 0, IOS_SIZE, IOS_SIZE, null)
+            drawImage(fg, 0, 0, IOS_SIZE, IOS_SIZE, null)
         }
 
         val outDir = appiconsetDir.asFile.get().apply { mkdirs() }
         val outPng = outDir.resolve("AppIcon-1024.png")
-
-        val resized = if (source.width == 1024 && source.height == 1024) {
-            source
-        } else {
-            BufferedImage(1024, 1024, BufferedImage.TYPE_INT_ARGB).also { img ->
-                val g = img.createGraphics()
-                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
-                g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g.drawImage(source, 0, 0, 1024, 1024, null)
-                g.dispose()
-            }
-        }
-
-        // Write image — compare bytes to avoid pointless writes that bust Xcode caches.
-        val newBytes = java.io.ByteArrayOutputStream().apply {
-            ImageIO.write(resized, "PNG", this)
-        }.toByteArray()
+        val newBytes = ByteArrayOutputStream().apply { ImageIO.write(composite, "PNG", this) }.toByteArray()
         if (!outPng.exists() || !outPng.readBytes().contentEquals(newBytes)) {
             outPng.writeBytes(newBytes)
         }
 
-        // Write Contents.json (single universal 1024 entry).
         val contentsJson = """
             |{
             |  "images" : [
@@ -91,6 +99,22 @@ abstract class SyncIosLogoTask : DefaultTask() {
             contentsFile.writeText(contentsJson)
         }
 
-        logger.lifecycle("[kmpSsot] iOS AppIcon synced from ${src.name} (1024x1024 universal).")
+        logger.lifecycle("[kmpSsot] iOS AppIcon synced from ${fgFile.name} + ${bgFile.name} (1024×1024 opaque).")
+    }
+
+    private inline fun Graphics2D.withQuality(block: Graphics2D.() -> Unit) {
+        try {
+            setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+            setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            composite = AlphaComposite.SrcOver
+            block()
+        } finally {
+            dispose()
+        }
+    }
+
+    companion object {
+        private const val IOS_SIZE = 1024
     }
 }
