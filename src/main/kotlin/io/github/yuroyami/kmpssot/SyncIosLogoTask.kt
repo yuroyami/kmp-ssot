@@ -3,6 +3,7 @@ package io.github.yuroyami.kmpssot
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
@@ -36,28 +37,37 @@ abstract class SyncIosLogoTask : DefaultTask() {
 
     @get:Internal abstract val foregroundPng: RegularFileProperty
     @get:Internal abstract val backgroundPng: RegularFileProperty
+    @get:Internal abstract val backgroundColorHex: Property<String>
     @get:Internal abstract val appiconsetDir: DirectoryProperty
 
     @TaskAction
     fun sync() {
         val fgFile = foregroundPng.asFile.get()
-        val bgFile = backgroundPng.asFile.get()
         if (!fgFile.exists()) {
             logger.warn("[kmpSsot] appLogoPngForeground not found at ${fgFile.path} — skipping iOS logo.")
             return
         }
-        if (!bgFile.exists()) {
-            logger.warn("[kmpSsot] appLogoPngBackground not found at ${bgFile.path} — skipping iOS logo.")
-            return
-        }
-
         val fg = ImageIO.read(fgFile) ?: run {
             logger.warn("[kmpSsot] Could not decode ${fgFile.path} as an image — skipping iOS logo.")
             return
         }
-        val bg = ImageIO.read(bgFile) ?: run {
-            logger.warn("[kmpSsot] Could not decode ${bgFile.path} as an image — skipping iOS logo.")
-            return
+
+        val bgDescription: String
+        val bg = if (backgroundColorHex.isPresent) {
+            val hex = backgroundColorHex.get()
+            bgDescription = "color $hex"
+            solidColorImage(IOS_SIZE, parseLogoBackgroundColor(hex))
+        } else {
+            val bgFile = backgroundPng.asFile.get()
+            if (!bgFile.exists()) {
+                logger.warn("[kmpSsot] appLogoPngBackground not found at ${bgFile.path} — skipping iOS logo.")
+                return
+            }
+            bgDescription = bgFile.name
+            ImageIO.read(bgFile) ?: run {
+                logger.warn("[kmpSsot] Could not decode ${bgFile.path} as an image — skipping iOS logo.")
+                return
+            }
         }
 
         // Composite at 1024×1024 directly. Output type INT_RGB so any residual
@@ -99,7 +109,7 @@ abstract class SyncIosLogoTask : DefaultTask() {
             contentsFile.writeText(contentsJson)
         }
 
-        logger.lifecycle("[kmpSsot] iOS AppIcon synced from ${fgFile.name} + ${bgFile.name} (1024×1024 opaque).")
+        logger.lifecycle("[kmpSsot] iOS AppIcon synced from ${fgFile.name} + $bgDescription (1024×1024 opaque).")
     }
 
     private inline fun Graphics2D.withQuality(block: Graphics2D.() -> Unit) {

@@ -3,6 +3,7 @@ package io.github.yuroyami.kmpssot
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
@@ -21,8 +22,9 @@ import javax.imageio.ImageIO
  * canvas like an iOS marketing icon) — no manual safe-zone padding required.
  * The plugin applies Android's adaptive-icon safe-zone scaling automatically:
  *
- *  - Adaptive FG layer: source FG centred at 66/108 (~61.1%) of the canvas,
- *    leaving a transparent margin for the launcher's parallax movement.
+ *  - Adaptive FG layer: source FG centred at [safeZoneRatio] of the canvas
+ *    (default 66/108 ~61.1%), leaving a transparent margin for the launcher's
+ *    parallax movement and mask.
  *  - Adaptive BG layer: source BG fills the 108dp canvas (parallax bleed).
  *  - Legacy fallback: source FG and BG composited at native size, then
  *    resized to the legacy launcher size — no safe-zone cropping, since the
@@ -52,35 +54,47 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
 
     @get:Internal abstract val foregroundPng: RegularFileProperty
     @get:Internal abstract val backgroundPng: RegularFileProperty
+    @get:Internal abstract val backgroundColorHex: Property<String>
+    @get:Internal abstract val safeZoneRatio: Property<Double>
     @get:Internal abstract val androidResDir: DirectoryProperty
 
     @TaskAction
     fun sync() {
         val fgFile = foregroundPng.asFile.get()
-        val bgFile = backgroundPng.asFile.get()
         if (!fgFile.exists()) {
             logger.warn("[kmpSsot] appLogoPngForeground not found at ${fgFile.path} — skipping Android logo.")
             return
         }
-        if (!bgFile.exists()) {
-            logger.warn("[kmpSsot] appLogoPngBackground not found at ${bgFile.path} — skipping Android logo.")
-            return
-        }
-
         val fg = ImageIO.read(fgFile) ?: run {
             logger.warn("[kmpSsot] Could not decode ${fgFile.path} as an image — skipping Android logo.")
             return
         }
-        val bg = ImageIO.read(bgFile) ?: run {
-            logger.warn("[kmpSsot] Could not decode ${bgFile.path} as an image — skipping Android logo.")
-            return
+
+        val bgDescription: String
+        val bg: BufferedImage = if (backgroundColorHex.isPresent) {
+            val hex = backgroundColorHex.get()
+            bgDescription = "color $hex"
+            // 432px matches xxxhdpi adaptive-icon canvas; downscaled per density.
+            solidColorImage(432, parseLogoBackgroundColor(hex))
+        } else {
+            val bgFile = backgroundPng.asFile.get()
+            if (!bgFile.exists()) {
+                logger.warn("[kmpSsot] appLogoPngBackground not found at ${bgFile.path} — skipping Android logo.")
+                return
+            }
+            val decoded = ImageIO.read(bgFile) ?: run {
+                logger.warn("[kmpSsot] Could not decode ${bgFile.path} as an image — skipping Android logo.")
+                return
+            }
+            if (decoded.width != decoded.height) {
+                logger.warn("[kmpSsot] appLogoPngBackground is not square (${decoded.width}×${decoded.height}) — output will be stretched.")
+            }
+            bgDescription = bgFile.name
+            decoded
         }
 
         if (fg.width != fg.height) {
             logger.warn("[kmpSsot] appLogoPngForeground is not square (${fg.width}×${fg.height}) — output will be stretched.")
-        }
-        if (bg.width != bg.height) {
-            logger.warn("[kmpSsot] appLogoPngBackground is not square (${bg.width}×${bg.height}) — output will be stretched.")
         }
         if (!fg.colorModel.hasAlpha()) {
             logger.warn("[kmpSsot] appLogoPngForeground has no alpha channel — it will fully cover the background. Use a PNG with transparency for proper layering.")
@@ -122,7 +136,7 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
         writeTextIfChanged(adaptiveDir.resolve("ic_launcher.xml"), adaptiveXml)
         writeTextIfChanged(adaptiveDir.resolve("ic_launcher_round.xml"), adaptiveXml)
 
-        logger.lifecycle("[kmpSsot] Android logo synced from ${fgFile.name} + ${bgFile.name}.")
+        logger.lifecycle("[kmpSsot] Android logo synced from ${fgFile.name} + $bgDescription.")
     }
 
     private fun buildAdaptiveIconWrapper(): String = """
@@ -134,13 +148,13 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
         |""".trimMargin()
 
     /**
-     * Centre [fg] at the 66/108 safe-zone scale on a transparent canvas of the
-     * requested size. Used for the adaptive-icon foreground layer so the
+     * Centre [fg] at the configured [safeZoneRatio] on a transparent canvas of
+     * the requested size. Used for the adaptive-icon foreground layer so the
      * launcher's mask (and parallax movement) doesn't crop the FG content.
      */
     private fun padToSafeZone(fg: BufferedImage, canvasSize: Int): BufferedImage {
         val out = BufferedImage(canvasSize, canvasSize, BufferedImage.TYPE_INT_ARGB)
-        val safeSize = (canvasSize * SAFE_ZONE_RATIO).toInt()
+        val safeSize = (canvasSize * safeZoneRatio.get()).toInt()
         val offset = (canvasSize - safeSize) / 2
         out.createGraphics().withQuality {
             drawImage(fg, offset, offset, safeSize, safeSize, null)
@@ -209,9 +223,6 @@ abstract class SyncAndroidLogoTask : DefaultTask() {
     }
 
     companion object {
-        // Adaptive-icon safe zone: inner 66dp of the 108dp canvas.
-        private const val SAFE_ZONE_RATIO = 66.0 / 108.0
-
         // Density qualifier → scale factor (dp → px). Adaptive icon canvas is
         // 108dp (108×scale px); legacy launcher is 48dp (48×scale px).
         private val DENSITIES = listOf(

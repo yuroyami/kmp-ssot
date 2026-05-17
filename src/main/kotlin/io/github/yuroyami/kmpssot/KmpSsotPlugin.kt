@@ -34,6 +34,7 @@ class KmpSsotPlugin : Plugin<Project> {
             syncIos.convention(true)
             sanitizeIosProject.convention(true)
             cleanupLegacyLogoArtifacts.convention(false)
+            appLogoAndroidSafeZoneRatio.convention(66.0 / 108.0)
 
             // Auto-detect locales from {sharedModule}/src/commonMain/composeResources/values-*.
             locales.convention(target.provider { autoDetectLocales(target, this) })
@@ -55,15 +56,29 @@ class KmpSsotPlugin : Plugin<Project> {
                             "name of your KMP shared module (e.g. \"shared\" or \"composeApp\")."
                 )
             }
-            // Logo: enforce paired-or-neither.
+            // Logo: FG must be paired with exactly one BG source (PNG or colour).
             val fgSet = ext.appLogoPngForeground.isPresent
             val bgSet = ext.appLogoPngBackground.isPresent
-            if (fgSet xor bgSet) {
+            val bgColorSet = ext.appLogoBackgroundColor.isPresent
+            if (bgSet && bgColorSet) {
                 throw GradleException(
-                    "kmpSsot { appLogoPngForeground + appLogoPngBackground } must be set together. " +
-                            "Either provide both layers or neither."
+                    "kmpSsot { appLogoPngBackground } and { appLogoBackgroundColor } are mutually " +
+                            "exclusive — set exactly one."
                 )
             }
+            if (fgSet && !bgSet && !bgColorSet) {
+                throw GradleException(
+                    "kmpSsot { appLogoPngForeground } is set but no background — set either " +
+                            "appLogoPngBackground or appLogoBackgroundColor."
+                )
+            }
+            if (!fgSet && (bgSet || bgColorSet)) {
+                throw GradleException(
+                    "kmpSsot background is set without a foreground — set appLogoPngForeground, " +
+                            "or remove the background."
+                )
+            }
+            if (bgColorSet) validateLogoBackgroundColorHex(ext.appLogoBackgroundColor.get())
 
             // Auto-cleanup of legacy logo artefacts is opt-in. When enabled, run
             // it before the regular Android sync so the new tree lands clean.
@@ -111,6 +126,8 @@ class KmpSsotPlugin : Plugin<Project> {
             infoPlistFile.set(root.layout.projectDirectory.file(ext.iosInfoPlistPath))
             propagateAppName.set(ext.propagateAppName)
             propagateVersion.set(ext.propagateVersion)
+            usesNonExemptEncryption.set(ext.ios.usesNonExemptEncryption)
+            proMotion120Hz.set(ext.ios.proMotion120Hz)
         }
 
     private fun registerSyncIosTask(
@@ -142,10 +159,12 @@ class KmpSsotPlugin : Plugin<Project> {
         root.tasks.register<SyncIosLogoTask>("syncIosLogo") {
             onlyIf {
                 ext.syncIos.get() && ext.propagateLogo.get() &&
-                        ext.appLogoPngForeground.isPresent && ext.appLogoPngBackground.isPresent
+                        ext.appLogoPngForeground.isPresent &&
+                        (ext.appLogoPngBackground.isPresent || ext.appLogoBackgroundColor.isPresent)
             }
             foregroundPng.set(ext.appLogoPngForeground)
             backgroundPng.set(ext.appLogoPngBackground)
+            backgroundColorHex.set(ext.appLogoBackgroundColor)
             appiconsetDir.set(root.layout.projectDirectory.dir("iosApp/iosApp/Assets.xcassets/AppIcon.appiconset"))
         }
 
@@ -156,10 +175,13 @@ class KmpSsotPlugin : Plugin<Project> {
         root.tasks.register<SyncAndroidLogoTask>("syncAndroidLogo") {
             onlyIf {
                 ext.propagateLogo.get() &&
-                        ext.appLogoPngForeground.isPresent && ext.appLogoPngBackground.isPresent
+                        ext.appLogoPngForeground.isPresent &&
+                        (ext.appLogoPngBackground.isPresent || ext.appLogoBackgroundColor.isPresent)
             }
             foregroundPng.set(ext.appLogoPngForeground)
             backgroundPng.set(ext.appLogoPngBackground)
+            backgroundColorHex.set(ext.appLogoBackgroundColor)
+            safeZoneRatio.set(ext.appLogoAndroidSafeZoneRatio)
             // Resolve lazily — androidAppModule may not be set yet at register time.
             androidResDir.set(root.layout.projectDirectory.dir(
                 ext.androidAppModule.map { "$it/src/main/res" }

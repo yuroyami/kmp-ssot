@@ -4,6 +4,7 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
 
@@ -16,13 +17,22 @@ import org.gradle.work.DisableCachingByDefault
  *   CFBundleShortVersionString→ $(MARKETING_VERSION)
  *   CFBundleVersion           → $(CURRENT_PROJECT_VERSION)
  *
- * Append-only: existing keys are never overwritten. When an existing key holds a
- * hardcoded literal instead of the expected `$(…)` reference, a warning is logged
- * — the pbxproj-level rewrite will do nothing for that field until the user aligns
- * the Info.plist with SSOT, so silent misbehaviour is avoided.
+ * Append-only for those: existing keys are never overwritten. When an existing
+ * key holds a hardcoded literal instead of the expected `$(…)` reference, a
+ * warning is logged — the pbxproj-level rewrite will do nothing for that field
+ * until the user aligns the Info.plist with SSOT, so silent misbehaviour is
+ * avoided.
  *
- * Each sanitizer is gated by the corresponding `propagate*` toggle — if a field
- * isn't being propagated, its plist key isn't touched.
+ * Also propagates DSL-driven boolean feature flags from `kmpSsot { ios { ... } }`:
+ *
+ *   ITSAppUsesNonExemptEncryption     ← ios.usesNonExemptEncryption
+ *   CADisableMinimumFrameDurationOnPhone ← ios.proMotion120Hz
+ *
+ * For those, the DSL is the source of truth: insert if missing, overwrite if
+ * the current plist value differs.
+ *
+ * Each string sanitizer is gated by the corresponding `propagate*` toggle.
+ * Each boolean sanitizer is gated by whether its DSL property is set.
  *
  * If the Info.plist file doesn't exist (e.g. `GENERATE_INFOPLIST_FILE = YES`),
  * the task exits quietly — the generated-plist path is already handled by the
@@ -42,6 +52,9 @@ abstract class SanitizeIosProjectTask : DefaultTask() {
     @get:Internal abstract val propagateAppName: Property<Boolean>
     @get:Internal abstract val propagateVersion: Property<Boolean>
 
+    @get:Internal @get:Optional abstract val usesNonExemptEncryption: Property<Boolean>
+    @get:Internal @get:Optional abstract val proMotion120Hz: Property<Boolean>
+
     @TaskAction
     fun sanitize() {
         val file = infoPlistFile.asFile.get()
@@ -50,45 +63,74 @@ abstract class SanitizeIosProjectTask : DefaultTask() {
             return
         }
 
-        val wanted = buildList {
+        val stringEntries = buildList {
             if (propagateAppName.get()) {
-                add(PlistKey("CFBundleDisplayName", "\$(PRODUCT_NAME)"))
-                add(PlistKey("CFBundleName",        "\$(PRODUCT_NAME)"))
+                add(StringEntry("CFBundleDisplayName", "\$(PRODUCT_NAME)"))
+                add(StringEntry("CFBundleName",        "\$(PRODUCT_NAME)"))
             }
             if (propagateVersion.get()) {
-                add(PlistKey("CFBundleShortVersionString", "\$(MARKETING_VERSION)"))
-                add(PlistKey("CFBundleVersion",            "\$(CURRENT_PROJECT_VERSION)"))
+                add(StringEntry("CFBundleShortVersionString", "\$(MARKETING_VERSION)"))
+                add(StringEntry("CFBundleVersion",            "\$(CURRENT_PROJECT_VERSION)"))
             }
         }
-        if (wanted.isEmpty()) return
+        val boolEntries = buildList {
+            if (usesNonExemptEncryption.isPresent) {
+                add(BoolEntry("ITSAppUsesNonExemptEncryption", usesNonExemptEncryption.get()))
+            }
+            if (proMotion120Hz.isPresent) {
+                add(BoolEntry("CADisableMinimumFrameDurationOnPhone", proMotion120Hz.get()))
+            }
+        }
+        if (stringEntries.isEmpty() && boolEntries.isEmpty()) return
 
         val original = file.readText()
         var updated = original
         val inserted = mutableListOf<String>()
+        val overwritten = mutableListOf<String>()
 
-        for (key in wanted) {
-            val existing = findStringValueFor(updated, key.name)
+        for (entry in stringEntries) {
+            val existing = findStringValueFor(updated, entry.name)
             if (existing == null) {
-                updated = insertKeyBeforeRootDictClose(updated, key)
-                inserted += key.name
-            } else if (existing != key.expectedValue) {
+                updated = insertStringBeforeRootDictClose(updated, entry)
+                inserted += entry.name
+            } else if (existing != entry.value) {
                 logger.warn(
-                    "[kmpSsot] Info.plist <$existing> has hardcoded <${key.name}> — " +
+                    "[kmpSsot] Info.plist <$existing> has hardcoded <${entry.name}> — " +
                             "kmpSsot propagation will NOT reach the home screen / version metadata. " +
-                            "Change it to <string>${key.expectedValue}</string> to restore SSOT."
+                            "Change it to <string>${entry.value}</string> to restore SSOT."
                 )
+            }
+        }
+
+        for (entry in boolEntries) {
+            val existing = findBoolValueFor(updated, entry.name)
+            when (existing) {
+                null -> {
+                    updated = insertBoolBeforeRootDictClose(updated, entry)
+                    inserted += entry.name
+                }
+                entry.value -> { /* already correct */ }
+                else -> {
+                    updated = replaceBoolValue(updated, entry.name, entry.value)
+                    overwritten += entry.name
+                }
             }
         }
 
         if (updated != original) {
             file.writeText(updated)
-            logger.lifecycle("[kmpSsot] Info.plist sanitized: inserted ${inserted.joinToString(", ")} pointing at build variables.")
+            val parts = buildList {
+                if (inserted.isNotEmpty()) add("inserted ${inserted.joinToString(", ")}")
+                if (overwritten.isNotEmpty()) add("overwrote ${overwritten.joinToString(", ")}")
+            }
+            logger.lifecycle("[kmpSsot] Info.plist sanitized: ${parts.joinToString("; ")}.")
         } else {
             logger.info("[kmpSsot] Info.plist already sanitized.")
         }
     }
 
-    private data class PlistKey(val name: String, val expectedValue: String)
+    private data class StringEntry(val name: String, val value: String)
+    private data class BoolEntry(val name: String, val value: Boolean)
 
     /** Returns the `<string>…</string>` value immediately following `<key>name</key>`, or null. */
     private fun findStringValueFor(xml: String, keyName: String): String? {
@@ -96,24 +138,49 @@ abstract class SanitizeIosProjectTask : DefaultTask() {
         return keyPattern.find(xml)?.groupValues?.get(1)
     }
 
+    /** Returns the boolean value following `<key>name</key>`, or null if absent / not a bool. */
+    private fun findBoolValueFor(xml: String, keyName: String): Boolean? {
+        val pattern = Regex("""<key>${Regex.escape(keyName)}</key>\s*<(true|false)/>""")
+        return pattern.find(xml)?.groupValues?.get(1)?.let { it == "true" }
+    }
+
+    private fun insertStringBeforeRootDictClose(xml: String, entry: StringEntry): String =
+        insertBeforeRootDictClose(xml, entry.name) { indent ->
+            "$indent<key>${entry.name}</key>\n$indent<string>${entry.value}</string>\n"
+        }
+
+    private fun insertBoolBeforeRootDictClose(xml: String, entry: BoolEntry): String =
+        insertBeforeRootDictClose(xml, entry.name) { indent ->
+            val boolTag = if (entry.value) "<true/>" else "<false/>"
+            "$indent<key>${entry.name}</key>\n$indent$boolTag\n"
+        }
+
     /**
-     * Insert a `<key>…</key>\n<tab><string>…</string>` block immediately before the final
-     * `</dict></plist>` pair. We match only the *outermost* dict close — nested dicts inside
-     * the plist (e.g. UIApplicationSceneManifest) are left alone. Indentation is sniffed from
-     * an existing `<key>` inside the same file (falling back to a single tab), so insertions
-     * visually match the surrounding formatting.
+     * Insert a key/value block immediately before the final `</dict></plist>` pair.
+     * Matches only the *outermost* dict close — nested dicts inside the plist
+     * (e.g. UIApplicationSceneManifest) are left alone. Indentation is sniffed
+     * from an existing `<key>` so insertions visually match the surrounding
+     * formatting.
      */
-    private fun insertKeyBeforeRootDictClose(xml: String, key: PlistKey): String {
+    private fun insertBeforeRootDictClose(
+        xml: String,
+        keyNameForLog: String,
+        render: (indent: String) -> String,
+    ): String {
         val rootClose = Regex("""</dict>\s*</plist>\s*$""")
         val match = rootClose.find(xml) ?: run {
-            logger.warn("[kmpSsot] Info.plist has no recognizable </dict></plist> tail — skipping insertion of ${key.name}.")
+            logger.warn("[kmpSsot] Info.plist has no recognizable </dict></plist> tail — skipping insertion of $keyNameForLog.")
             return xml
         }
-        val indent = detectItemIndent(xml)
-        // `</dict>` sits on its own line preceded by `\n`, so we only need a leading indent —
-        // no extra newline, or we'd leave a blank line where we inserted.
-        val block = "$indent<key>${key.name}</key>\n$indent<string>${key.expectedValue}</string>\n"
+        val block = render(detectItemIndent(xml))
         return xml.substring(0, match.range.first) + block + xml.substring(match.range.first)
+    }
+
+    /** Replace the boolean value following `<key>name</key>` in-place, preserving surrounding whitespace. */
+    private fun replaceBoolValue(xml: String, keyName: String, value: Boolean): String {
+        val pattern = Regex("""(<key>${Regex.escape(keyName)}</key>\s*)<(?:true|false)/>""")
+        val newBool = if (value) "<true/>" else "<false/>"
+        return pattern.replace(xml, "$1$newBool")
     }
 
     /** Find the whitespace-only indentation of the first existing `<key>` (tabs/spaces, no newline). */
