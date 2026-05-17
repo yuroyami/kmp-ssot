@@ -4,7 +4,6 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
 
@@ -52,8 +51,10 @@ abstract class SanitizeIosProjectTask : DefaultTask() {
     @get:Internal abstract val propagateAppName: Property<Boolean>
     @get:Internal abstract val propagateVersion: Property<Boolean>
 
-    @get:Internal @get:Optional abstract val usesNonExemptEncryption: Property<Boolean>
-    @get:Internal @get:Optional abstract val proMotion120Hz: Property<Boolean>
+    // Not declared as task inputs — values are read at execution via `isPresent`.
+    // @Optional only applies to input annotations and conflicts with @Internal under Gradle 9.
+    @get:Internal abstract val usesNonExemptEncryption: Property<Boolean>
+    @get:Internal abstract val proMotion120Hz: Property<Boolean>
 
     @TaskAction
     fun sanitize() {

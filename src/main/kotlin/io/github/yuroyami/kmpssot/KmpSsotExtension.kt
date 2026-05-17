@@ -2,6 +2,7 @@ package io.github.yuroyami.kmpssot
 
 import org.gradle.api.Action
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.plugins.ExtensionAware
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
@@ -180,8 +181,14 @@ abstract class KmpSsotExtension {
      *             proMotion120Hz = true
      *         }
      *     }
+     *
+     * Registered as a child extension on this `ExtensionAware` instance by
+     * `KmpSsotPlugin.apply`. Gradle can't decorate an abstract property of a
+     * non-managed type, so the nested extension is created explicitly and
+     * exposed through this getter rather than as an abstract property.
      */
-    abstract val ios: KmpSsotIosExtension
+    val ios: KmpSsotIosExtension
+        get() = (this as ExtensionAware).extensions.getByType(KmpSsotIosExtension::class.java)
 
     fun ios(action: Action<in KmpSsotIosExtension>) {
         action.execute(ios)

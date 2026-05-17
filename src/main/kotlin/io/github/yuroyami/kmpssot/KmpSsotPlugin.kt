@@ -7,6 +7,7 @@ import org.gradle.api.JavaVersion
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.tasks.TaskProvider
+import org.gradle.api.plugins.ExtensionAware
 import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
@@ -39,6 +40,11 @@ class KmpSsotPlugin : Plugin<Project> {
             // Auto-detect locales from {sharedModule}/src/commonMain/composeResources/values-*.
             locales.convention(target.provider { autoDetectLocales(target, this) })
         }
+
+        // Register the nested `ios { }` extension. Gradle can't decorate an
+        // abstract property of a non-managed type on KmpSsotExtension, so we
+        // create it explicitly here and expose it via a getter on the parent.
+        (ext as ExtensionAware).extensions.create<KmpSsotIosExtension>("ios")
 
         val sanitizeIosTask = registerSanitizeIosTask(target, ext)
         val syncIosTask = registerSyncIosTask(target, ext)
