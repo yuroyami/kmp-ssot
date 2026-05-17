@@ -42,10 +42,13 @@ kmpSsot {
     // Explicit list overrides:
     // locales = listOf("en", "ar", "fr")
 
-    // App logo — both layers required, or both null. Design naturally
-    // (fill the canvas, iOS-style); the plugin handles Android's safe zone.
-    // appLogoPngForeground = file("art/logo_foreground.png")
-    // appLogoPngBackground = file("art/logo_background.png")
+    // App logo — FG always required, plus exactly one BG source. Design
+    // naturally (fill the canvas, iOS-style); the plugin handles Android's
+    // safe zone, with a tunable ratio if a tight launcher mask clips corners.
+    // appLogoPngForeground        = file("art/logo_foreground.png")
+    // appLogoPngBackground        = file("art/logo_background.png")
+    // appLogoBackgroundColor      = "#FF5500"      // or "#FFFF5500" (AARRGGBB) — alternative to BG PNG
+    // appLogoAndroidSafeZoneRatio = 66.0 / 108.0   // default; lower (e.g. 0.55) if corners clip
 
     // Toggles — all default true. Flip a single flag to opt out.
     // propagateAppName       = true
@@ -119,31 +122,42 @@ kotlin.android {
 
 ## App logo
 
-Provide two square PNG layers:
+Provide a foreground layer plus exactly one background source:
 
-- `appLogoPngForeground` — PNG with an alpha channel. The visible logo content.
-- `appLogoPngBackground` — PNG (effectively opaque). Colour or texture behind the foreground.
+- `appLogoPngForeground` — square PNG with an alpha channel. The visible logo content. **Always required** when propagating a logo.
+- Background — pick **exactly one**:
+  - `appLogoPngBackground` — square PNG (effectively opaque). Colour or texture behind the foreground.
+  - `appLogoBackgroundColor` — hex string `"#RRGGBB"` or `"#AARRGGBB"` (Android convention — alpha first). The plugin synthesizes a solid-colour image and feeds it through the same pipeline as a real BG PNG.
 
 **Design naturally** — fill the canvas like an iOS App Store icon. The plugin
 handles Android's adaptive-icon safe zone for you: when generating the
-adaptive FG layer, the source FG is centred at 66/108 (~61.1%) of the 108dp
-canvas with a transparent margin, so the launcher's mask and parallax
-movement never crop your content. iOS and the Android legacy fallback render
-the source layers at native size — what you design is what ships.
+adaptive FG layer, the source FG is centred at `appLogoAndroidSafeZoneRatio`
+of the 108dp canvas (default `66.0 / 108.0` ≈ 61.1%, matching Android's
+adaptive-icon spec) with a transparent margin, so the launcher's mask and
+parallax movement don't crop your content. iOS and the Android legacy
+fallback render the source layers at native size — what you design is what
+ships.
+
+Lower `appLogoAndroidSafeZoneRatio` if your target launcher applies a
+tighter mask than the inscribed circle (common on third-party launchers and
+some OEM skins) and the FG corners still clip. Typical overrides land
+around `0.55`–`0.6`.
 
 Recommended source size: 1024×1024 (matches the iOS App Store icon). Minimum
 useful size: 432×432 (xxxhdpi adaptive-icon foreground).
 
-If you set only one of the two layers, the build fails at `afterEvaluate` —
-pair them, or leave both unset.
+Validation runs at `afterEvaluate`: setting `appLogoPngForeground` requires
+exactly one of `appLogoPngBackground` / `appLogoBackgroundColor`. Setting
+both backgrounds — or either background without the foreground — fails the
+build.
 
 **Android (`syncAndroidLogo`)** generates a complete launcher-icon resource
 tree under `${androidAppModule}/src/main/res/`:
 
 | Output | Notes |
 |---|---|
-| `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_foreground.png` | FG, auto-padded to 66/108 safe zone |
-| `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_background.png` | BG, fills the 108×scale canvas |
+| `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_foreground.png` | FG, auto-padded to `appLogoAndroidSafeZoneRatio` (default 66/108) |
+| `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_background.png` | BG (PNG or solid colour), fills the 108×scale canvas |
 | `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher.png` | Legacy fallback (square, 48×scale) |
 | `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher_round.png` | Legacy fallback (circle-masked) |
 | `mipmap-anydpi-v26/ic_launcher{,_round}.xml` | API-26+ adaptive-icon wrappers |
@@ -153,10 +167,11 @@ The plugin does **not** copy anything into `commonMain/composeResources/` —
 if you want the logo available to Compose, place it in `composeResources/`
 yourself.
 
-**iOS (`syncIosLogo`)** composites foreground over background at 1024×1024,
-flattens to opaque RGB (App Store rejects alpha icons), writes
-`AppIcon-1024.png` and a single-image universal `Contents.json`. Requires
-iOS deployment target 14+. Hooked into the iOS framework link tasks.
+**iOS (`syncIosLogo`)** composites foreground over background (PNG or
+synthesized solid colour) at 1024×1024, flattens to opaque RGB (App Store
+rejects alpha icons), writes `AppIcon-1024.png` and a single-image
+universal `Contents.json`. Requires iOS deployment target 14+. Hooked into
+the iOS framework link tasks.
 
 ### Migrating older versions
 
